@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Vehicle Tracker — System Design</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fff; color: #111; padding: 40px 32px 80px; }
+
+h1 { font-size: 20px; font-weight: 800; text-align: center; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #666; text-align: center; margin-bottom: 8px; }
+.scenario { font-size: 12px; text-align: center; margin-bottom: 36px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; padding: 8px 16px; max-width: 520px; margin-left: auto; margin-right: auto; margin-top: 8px; }
+
+/* ── CANVAS ── */
+.canvas { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; }
+
+/* ── LAYER ── */
+.layer { width: 100%; border: 2px solid #111; border-radius: 10px; padding: 14px 16px; background: #fafafa; }
+.layer-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; }
+.layer-name { font-size: 13px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; }
+.layer-desc { font-size: 11px; color: #666; }
+.layer-rule { margin-left: auto; font-size: 10px; color: #999; font-style: italic; }
+
+/* ── FILE GRID ── */
+.files { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.file { background: #fff; border: 1px solid #ccc; border-radius: 7px; padding: 10px 12px; }
+.file-name { font-family: "SF Mono", "Fira Code", monospace; font-size: 11px; font-weight: 700; margin-bottom: 4px; color: #111; }
+.file-desc { font-size: 10px; color: #555; line-height: 1.5; }
+.file-bullets { margin-top: 4px; padding-left: 0; list-style: none; }
+.file-bullets li { font-size: 10px; color: #555; line-height: 1.55; padding-left: 10px; position: relative; }
+.file-bullets li::before { content: '·'; position: absolute; left: 0; color: #999; }
+
+/* ── CONNECTOR ── */
+.conn { display: flex; flex-direction: column; align-items: center; padding: 4px 0; gap: 0; }
+.conn-line { width: 1px; height: 20px; background: #bbb; }
+.conn-arrow { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid #999; }
+.conn-label { font-size: 10px; color: #555; font-weight: 600; background: #fff; padding: 2px 10px; border-radius: 10px; border: 1px solid #ddd; margin: -1px 0; z-index: 1; position: relative; }
+
+/* ── SIDE-BY-SIDE LAYERS ── */
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+
+/* ── EXTERNAL BOX ── */
+.external { border-style: dashed; background: #f0f0f0; }
+.external .layer-name { color: #555; }
+
+/* ── SINGLE COMPONENT BOX ── */
+.component { border: 1px solid #bbb; border-radius: 8px; padding: 10px 14px; background: #f8f8f8; width: 100%; }
+.component-name { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+.component-sub { font-size: 10px; color: #666; line-height: 1.5; }
+
+/* ── FLOW ROW (bottom section) ── */
+.flows { max-width: 920px; margin: 32px auto 0; }
+.flows-title { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 16px; }
+.flow { display: flex; gap: 10px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #eee; }
+.flow:last-child { border-bottom: none; }
+.flow-n { width: 22px; height: 22px; border: 2px solid #111; border-radius: 50%; font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.flow-body { flex: 1; }
+.flow-title { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+.flow-desc { font-size: 11px; color: #555; line-height: 1.55; }
+.flow-path { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.fp { font-family: "SF Mono", "Fira Code", monospace; font-size: 10px; font-weight: 600; padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; color: #111; }
+.fp-arr { font-size: 11px; color: #aaa; }
+
+/* ── FILE TABLE ── */
+.file-table { max-width: 920px; margin: 32px auto 0; }
+.file-table-title { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 0; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #999; padding: 10px 14px; border-bottom: 1px solid #eee; }
+td { padding: 10px 14px; font-size: 11px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-family: "SF Mono", "Fira Code", monospace; font-weight: 700; font-size: 10px; white-space: nowrap; color: #111; }
+td:nth-child(2) { color: #333; font-weight: 600; }
+td:last-child { color: #666; }
+</style>
+</head>
+<body>
+
+<h1>Vehicle Tracker — System Design</h1>
+<p class="sub">TJTS5901 · Continuous Software Engineering · Course Project</p>
+<div class="scenario">
+  <strong>Scenario 2:</strong> User picks a bus route from a dropdown → sees live bus positions on a map → updates automatically
+</div>
+
+<div class="canvas">
+
+  <!-- ══ BROWSER ══ -->
+  <div class="layer">
+    <div class="layer-header">
+      <span class="layer-name">Frontend — Browser</span>
+      <span class="layer-desc">What the user sees and interacts with</span>
+      <span class="layer-rule">No business logic here</span>
+    </div>
+    <div class="files">
+      <div class="file">
+        <div class="file-name">templates/index.html</div>
+        <ul class="file-bullets">
+          <li>Page shell — loads Leaflet.js and app.js</li>
+          <li>Route dropdown — populated via /api/routes on load</li>
+          <li>Map container div — Leaflet attaches here</li>
+          <li>Status bar — shows freshness and bus count</li>
+          <li>Error banner — shown when feed is stale</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">static/app.js</div>
+        <ul class="file-bullets">
+          <li>Initialises Leaflet map centred on Jyväskylä</li>
+          <li>Opens WebSocket to /ws/{route_id} on route select</li>
+          <li>On message: update or create bus markers</li>
+          <li>Rotating arrow icon — direction from bearing field</li>
+          <li>Auto-reconnect if WebSocket drops</li>
+          <li>Popup on click: bus label, speed, next stop</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">static/style.css</div>
+        <ul class="file-bullets">
+          <li>Layout: header bar + full-height map</li>
+          <li>Status badge colours: green/yellow/red</li>
+          <li>Minimal — map does the heavy lifting</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-label">HTTP — GET /api/routes &nbsp;|&nbsp; WebSocket /ws/{route_id}</div>
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ APPLICATION LAYER ══ -->
+  <div class="layer">
+    <div class="layer-header">
+      <span class="layer-name">Application Layer — FastAPI</span>
+      <span class="layer-desc">Serves endpoints and pushes data to clients. No logic, no HTTP calls to Waltti.</span>
+      <span class="layer-rule">Only calls Processing layer</span>
+    </div>
+    <div class="files">
+      <div class="file">
+        <div class="file-name">app/main.py</div>
+        <ul class="file-bullets">
+          <li>Creates FastAPI app instance</li>
+          <li>Mounts static files and templates</li>
+          <li>Registers routers</li>
+          <li>Startup event: connects to Redis</li>
+          <li>CORS middleware for local dev</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">app/routes.py</div>
+        <ul class="file-bullets">
+          <li>GET / → serve index.html</li>
+          <li>GET /api/routes → list of route IDs from live feed</li>
+          <li>WebSocket /ws/{route_id} → accept connection, subscribe to Redis Pub/Sub channel, push new positions to this client whenever worker publishes</li>
+          <li>On client disconnect: unsubscribe cleanly</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">app/dependencies.py</div>
+        <ul class="file-bullets">
+          <li>Redis client singleton (shared across requests)</li>
+          <li>Injected into route handlers via FastAPI Depends()</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-label">function calls — no HTTP</div>
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ PROCESSING LAYER ══ -->
+  <div class="layer">
+    <div class="layer-header">
+      <span class="layer-name">Processing Layer</span>
+      <span class="layer-desc">Pure Python — takes raw data in, returns clean results out. No HTTP, no Redis, no UI.</span>
+      <span class="layer-rule">Only called by Application. Only calls Ingestion.</span>
+    </div>
+    <div class="files">
+      <div class="file">
+        <div class="file-name">processing/vehicle_service.py</div>
+        <ul class="file-bullets">
+          <li>filter_by_route(vehicles, route_id) → list</li>
+          <li>get_all_route_ids(vehicles) → sorted list of unique IDs</li>
+          <li>compute_freshness(fetched_at) → LIVE / DELAYED / STALE + age label</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">processing/models.py</div>
+        <ul class="file-bullets">
+          <li>Vehicle dataclass: id, route_id, lat, lon, bearing, speed_kmh, label, timestamp</li>
+          <li>FreshnessStatus dataclass: level, age_seconds, label</li>
+          <li>FreshnessLevel enum: LIVE / DELAYED / STALE</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-label">function calls — no HTTP</div>
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ INGESTION LAYER ══ -->
+  <div class="layer">
+    <div class="layer-header">
+      <span class="layer-name">Ingestion Layer</span>
+      <span class="layer-desc">Fetches from Waltti. Decodes protobuf. Writes to Redis. Knows nothing about routes or the UI.</span>
+      <span class="layer-rule">Only touches Waltti API and Redis</span>
+    </div>
+    <div class="files">
+      <div class="file">
+        <div class="file-name">ingestion/worker.py</div>
+        <ul class="file-bullets">
+          <li>Runs as a separate process (not inside FastAPI)</li>
+          <li>Infinite loop: sleep 30s → fetch → decode → write Redis → publish</li>
+          <li>On fetch failure: log error, skip write, keep old Redis data alive</li>
+          <li>Exponential backoff on repeated failures</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">ingestion/feed_fetcher.py</div>
+        <ul class="file-bullets">
+          <li>fetch_vehicle_positions() → raw bytes from Waltti GTFS-RT</li>
+          <li>Sets x-api-key header from config</li>
+          <li>10s timeout, raises on non-200 response</li>
+          <li>Called only by worker.py</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">ingestion/gtfs_parser.py</div>
+        <ul class="file-bullets">
+          <li>parse_feed(raw_bytes) → list of Vehicle objects</li>
+          <li>Uses gtfs-realtime-bindings to decode protobuf</li>
+          <li>Skips entities with no position field</li>
+          <li>Null-checks every optional field (bearing, speed)</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">ingestion/cache_writer.py</div>
+        <ul class="file-bullets">
+          <li>write_to_redis(vehicles, redis_client)</li>
+          <li>Stores JSON per route_id with 60s TTL</li>
+          <li>Publishes "vehicles:updated" Pub/Sub event</li>
+          <li>FastAPI subscribes to this event → pushes to WebSocket clients</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ DATA + EXTERNAL ROW ══ -->
+  <div class="row">
+    <div class="layer">
+      <div class="layer-header">
+        <span class="layer-name">Redis</span>
+        <span class="layer-desc">Cache + Pub/Sub</span>
+      </div>
+      <div class="files" style="grid-template-columns: 1fr;">
+        <div class="file">
+          <div class="file-name">Cache — vehicles:{route_id}</div>
+          <ul class="file-bullets">
+            <li>Key: vehicles:4 → JSON array of vehicle positions</li>
+            <li>TTL: 60s (survives one missed worker cycle)</li>
+            <li>FastAPI reads this key when client connects</li>
+          </ul>
+        </div>
+        <div class="file" style="margin-top:8px">
+          <div class="file-name">Pub/Sub — vehicles:updated</div>
+          <ul class="file-bullets">
+            <li>Worker publishes after every successful write</li>
+            <li>FastAPI subscribes — one message → push to all connected WebSocket clients</li>
+            <li>No polling needed on the server side</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="layer external">
+      <div class="layer-header">
+        <span class="layer-name">External APIs</span>
+        <span class="layer-desc">Not our infrastructure</span>
+      </div>
+      <div class="files" style="grid-template-columns: 1fr;">
+        <div class="file">
+          <div class="file-name">Waltti GTFS-RT API</div>
+          <ul class="file-bullets">
+            <li>Vehicle positions feed — binary protobuf</li>
+            <li>Called once per 30s by worker — never by FastAPI</li>
+            <li>Auth: x-api-key header from .env</li>
+            <li>URL: configured via WALTTI_BASE_URL env var</li>
+          </ul>
+        </div>
+        <div class="file" style="margin-top:8px">
+          <div class="file-name">OpenStreetMap Tiles</div>
+          <ul class="file-bullets">
+            <li>Map background — fetched directly by browser</li>
+            <li>Free, no API key required</li>
+            <li>Leaflet handles tile loading automatically</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ CONFIG + CI ROW ══ -->
+  <div class="row">
+    <div class="layer">
+      <div class="layer-header">
+        <span class="layer-name">Configuration</span>
+      </div>
+      <div class="files" style="grid-template-columns: 1fr 1fr;">
+        <div class="file">
+          <div class="file-name">config.py</div>
+          <ul class="file-bullets">
+            <li>Loads all settings from environment via python-dotenv</li>
+            <li>WALTTI_BASE_URL, WALTTI_API_KEY</li>
+            <li>REDIS_URL, CACHE_TTL, STALE_THRESHOLD</li>
+            <li>Single import used across all layers</li>
+          </ul>
+        </div>
+        <div class="file">
+          <div class="file-name">.env &nbsp;/&nbsp; .env.example</div>
+          <ul class="file-bullets">
+            <li>.env — real secrets, never committed to git</li>
+            <li>.env.example — template with placeholder values, committed</li>
+            <li>WALTTI_API_KEY=your_key_here</li>
+            <li>REDIS_URL=redis://localhost:6379</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="layer-header">
+        <span class="layer-name">CI / CD + Docker</span>
+      </div>
+      <div class="files" style="grid-template-columns: 1fr 1fr;">
+        <div class="file">
+          <div class="file-name">docker-compose.yml</div>
+          <ul class="file-bullets">
+            <li>3 services: fastapi, worker, redis</li>
+            <li>Single command: docker compose up</li>
+            <li>Redis image from Docker Hub</li>
+            <li>Shared .env file for all services</li>
+          </ul>
+        </div>
+        <div class="file">
+          <div class="file-name">.github/workflows/ci.yml</div>
+          <ul class="file-bullets">
+            <li>Runs on every pull request</li>
+            <li>Steps: install deps → lint → type check → tests</li>
+            <li>Spins up Redis as a service for integration tests</li>
+            <li>Blocks merge if tests fail</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="conn">
+    <div class="conn-line"></div>
+    <div class="conn-arrow"></div>
+  </div>
+
+  <!-- ══ TESTS ══ -->
+  <div class="layer">
+    <div class="layer-header">
+      <span class="layer-name">Tests — pytest</span>
+      <span class="layer-desc">Unit tests for processing, integration tests for ingestion</span>
+    </div>
+    <div class="files">
+      <div class="file">
+        <div class="file-name">tests/test_vehicle_service.py</div>
+        <ul class="file-bullets">
+          <li>filter_by_route returns only matching route_id</li>
+          <li>filter_by_route with no matches returns empty list</li>
+          <li>get_all_route_ids returns sorted unique list</li>
+          <li>compute_freshness: &lt;60s → LIVE, 60–120s → DELAYED, &gt;120s → STALE</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">tests/test_gtfs_parser.py</div>
+        <ul class="file-bullets">
+          <li>parse_feed with valid protobuf → correct Vehicle list</li>
+          <li>parse_feed skips entity with no position field</li>
+          <li>parse_feed handles missing bearing/speed gracefully</li>
+          <li>Uses fixture: tests/fixtures/vehicles.pb (captured real feed)</li>
+        </ul>
+      </div>
+      <div class="file">
+        <div class="file-name">tests/test_feed_fetcher.py</div>
+        <ul class="file-bullets">
+          <li>Successful fetch returns bytes</li>
+          <li>HTTP 500 raises exception (does not return empty)</li>
+          <li>Timeout raises exception</li>
+          <li>Uses responses library to mock HTTP — no real Waltti calls in tests</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /canvas -->
+
+
+<!-- ════════════════════════════
+     DATA FLOWS
+════════════════════════════ -->
+<div class="flows">
+  <div class="flows-title">How Data Flows — Step by Step</div>
+
+  <div class="flow">
+    <div class="flow-n">1</div>
+    <div class="flow-body">
+      <div class="flow-title">User opens the app</div>
+      <div class="flow-desc">Browser loads index.html. Leaflet map appears centred on Jyväskylä. JavaScript calls /api/routes which reads from Redis (or triggers a Waltti fetch if cache is empty). Dropdown is populated with active route IDs.</div>
+      <div class="flow-path">
+        <span class="fp">Browser</span><span class="fp-arr">→</span>
+        <span class="fp">GET /api/routes</span><span class="fp-arr">→</span>
+        <span class="fp">routes.py</span><span class="fp-arr">→</span>
+        <span class="fp">vehicle_service.py</span><span class="fp-arr">→</span>
+        <span class="fp">Redis read</span><span class="fp-arr">→</span>
+        <span class="fp">JSON → dropdown</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-n">2</div>
+    <div class="flow-body">
+      <div class="flow-title">User selects Route 4</div>
+      <div class="flow-desc">Browser opens a WebSocket to /ws/4. FastAPI reads vehicles:4 from Redis and immediately sends current positions. Client draws bus markers on the map. Connection stays open.</div>
+      <div class="flow-path">
+        <span class="fp">Browser WS → /ws/4</span><span class="fp-arr">→</span>
+        <span class="fp">routes.py</span><span class="fp-arr">→</span>
+        <span class="fp">Redis read vehicles:4</span><span class="fp-arr">→</span>
+        <span class="fp">send JSON</span><span class="fp-arr">→</span>
+        <span class="fp">app.js → draw markers</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-n">3</div>
+    <div class="flow-body">
+      <div class="flow-title">Worker runs every 30 seconds (separate process)</div>
+      <div class="flow-desc">worker.py wakes up, calls feed_fetcher.py which fetches from Waltti. gtfs_parser.py decodes the protobuf binary. cache_writer.py stores updated positions in Redis and publishes "vehicles:updated". FastAPI receives the Pub/Sub event and pushes new positions to all connected WebSocket clients. Browsers update markers — no polling from client side.</div>
+      <div class="flow-path">
+        <span class="fp">worker.py</span><span class="fp-arr">→</span>
+        <span class="fp">feed_fetcher.py → Waltti</span><span class="fp-arr">→</span>
+        <span class="fp">gtfs_parser.py → Vehicle list</span><span class="fp-arr">→</span>
+        <span class="fp">cache_writer.py → Redis write + publish</span><span class="fp-arr">→</span>
+        <span class="fp">routes.py → WS push</span><span class="fp-arr">→</span>
+        <span class="fp">Browser updates</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-n">4</div>
+    <div class="flow-body">
+      <div class="flow-title">Waltti API is unavailable</div>
+      <div class="flow-desc">feed_fetcher.py raises an exception. worker.py catches it, logs the error, skips the Redis write. Redis TTL keeps old data alive for up to 60s. FastAPI serves stale positions with freshness level = STALE. Browser shows the red error banner. No crash, data still visible.</div>
+      <div class="flow-path">
+        <span class="fp">feed_fetcher.py → timeout</span><span class="fp-arr">→</span>
+        <span class="fp">worker.py catches exception</span><span class="fp-arr">→</span>
+        <span class="fp">Redis TTL still valid → stale data served</span><span class="fp-arr">→</span>
+        <span class="fp">freshness = STALE → red banner</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ════════════════════════════
+     FILE REFERENCE
+════════════════════════════ -->
+<div class="file-table">
+  <div class="file-table-title">Complete File Reference</div>
+  <table>
+    <thead>
+      <tr><th>File</th><th>Layer</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>app/main.py</td><td>Application</td><td>FastAPI app setup, startup events, middleware</td></tr>
+      <tr><td>app/routes.py</td><td>Application</td><td>HTTP endpoints and WebSocket handler</td></tr>
+      <tr><td>app/dependencies.py</td><td>Application</td><td>Shared Redis client via FastAPI dependency injection</td></tr>
+      <tr><td>processing/vehicle_service.py</td><td>Processing</td><td>Route filtering, freshness computation — pure functions</td></tr>
+      <tr><td>processing/models.py</td><td>Processing</td><td>Vehicle and FreshnessStatus dataclasses</td></tr>
+      <tr><td>ingestion/worker.py</td><td>Ingestion</td><td>Separate process, 30s polling loop, orchestrates fetch → parse → write</td></tr>
+      <tr><td>ingestion/feed_fetcher.py</td><td>Ingestion</td><td>HTTP client for Waltti GTFS-RT API</td></tr>
+      <tr><td>ingestion/gtfs_parser.py</td><td>Ingestion</td><td>Protobuf decoder, converts raw bytes to Vehicle objects</td></tr>
+      <tr><td>ingestion/cache_writer.py</td><td>Ingestion</td><td>Writes vehicles to Redis, publishes Pub/Sub update event</td></tr>
+      <tr><td>templates/index.html</td><td>Frontend</td><td>Page shell with map container and dropdown</td></tr>
+      <tr><td>static/app.js</td><td>Frontend</td><td>Leaflet map, WebSocket client, marker management</td></tr>
+      <tr><td>static/style.css</td><td>Frontend</td><td>Minimal layout styles</td></tr>
+      <tr><td>config.py</td><td>Config</td><td>All settings loaded from environment variables</td></tr>
+      <tr><td>.env.example</td><td>Config</td><td>Template showing required environment variables</td></tr>
+      <tr><td>docker-compose.yml</td><td>Infra</td><td>Runs fastapi + worker + redis with one command</td></tr>
+      <tr><td>Dockerfile</td><td>Infra</td><td>Container image for both fastapi and worker services</td></tr>
+      <tr><td>.github/workflows/ci.yml</td><td>CI/CD</td><td>Lint, type check, tests on every pull request</td></tr>
+      <tr><td>tests/test_vehicle_service.py</td><td>Tests</td><td>Unit tests for processing layer pure functions</td></tr>
+      <tr><td>tests/test_gtfs_parser.py</td><td>Tests</td><td>Unit tests for protobuf parser using a captured feed fixture</td></tr>
+      <tr><td>tests/test_feed_fetcher.py</td><td>Tests</td><td>Integration tests for HTTP client with mocked responses</td></tr>
+      <tr><td>tests/fixtures/vehicles.pb</td><td>Tests</td><td>Captured real Waltti feed snapshot — tests run offline</td></tr>
+      <tr><td>requirements.txt</td><td>Config</td><td>fastapi, uvicorn, redis, gtfs-realtime-bindings, pytest, httpx</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

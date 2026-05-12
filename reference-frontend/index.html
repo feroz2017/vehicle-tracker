@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Vehicle Tracker — Jyväskylä</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header>
+  <div class="header-title">Vehicle Tracker</div>
+
+  <!-- Search form -->
+  <div class="search-bar">
+    <div class="search-field">
+      <label>From</label>
+      <input id="input-from" type="text" placeholder="e.g. Jyväskylä station" autocomplete="off"/>
+      <ul id="suggestions-from" class="suggestions hidden"></ul>
+    </div>
+    <div class="search-field">
+      <label>To</label>
+      <input id="input-to" type="text" placeholder="e.g. University" autocomplete="off"/>
+      <ul id="suggestions-to" class="suggestions hidden"></ul>
+    </div>
+    <button id="btn-search" onclick="search()">Search</button>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar" class="status-bar hidden">
+    <span id="freshness-badge" class="badge">—</span>
+    <span id="vehicle-count"></span>
+  </div>
+</header>
+
+<!-- ── ALERT BANNER ── -->
+<div id="alert-banner" class="alert-banner hidden"></div>
+
+<!-- ── ROUTES PANEL ── -->
+<div id="routes-panel" class="routes-panel hidden">
+  <div class="routes-panel-title">Available routes</div>
+  <div id="routes-list"></div>
+</div>
+
+<!-- ── ERROR ── -->
+<div id="error-box" class="error-box hidden"></div>
+
+<!-- ── LOADING ── -->
+<div id="loading" class="loading hidden">Searching routes…</div>
+
+<!-- ── MAP ── -->
+<div id="map"></div>
+
+<!-- ── EMPTY STATE ── -->
+<div id="empty-state" class="empty-state hidden">No active buses on this route right now.</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

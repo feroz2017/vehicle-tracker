@@ -1,0 +1,115 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f8fafc;
+  color: #111;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── HEADER ── */
+header {
+  background: #111;
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.header-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
+
+/* ── SEARCH BAR ── */
+.search-bar { display: flex; gap: 8px; align-items: flex-end; flex: 1; flex-wrap: wrap; }
+.search-field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 160px; position: relative; }
+.search-field label { font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: .5px; }
+.search-field input {
+  padding: 7px 10px; border-radius: 6px; border: 1px solid #333;
+  background: #222; color: #fff; font-size: 13px; width: 100%;
+}
+.search-field input:focus { outline: none; border-color: #888; }
+
+button#btn-search {
+  padding: 8px 18px; border-radius: 6px; border: none;
+  background: #fff; color: #111; font-size: 13px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+button#btn-search:hover { background: #e5e7eb; }
+button#btn-search:disabled { background: #555; color: #888; cursor: not-allowed; }
+
+/* ── SUGGESTIONS DROPDOWN ── */
+.suggestions {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 9999;
+  background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
+  list-style: none; margin-top: 2px; overflow: hidden;
+}
+.suggestions li {
+  padding: 8px 12px; font-size: 12px; color: #ddd; cursor: pointer;
+  border-bottom: 1px solid #2a2a2a;
+}
+.suggestions li:last-child { border-bottom: none; }
+.suggestions li:hover { background: #2a2a2a; }
+.hidden { display: none !important; }
+
+/* ── STATUS BAR ── */
+.status-bar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.badge {
+  font-size: 10px; font-weight: 700; padding: 3px 8px;
+  border-radius: 10px; letter-spacing: .4px; text-transform: uppercase;
+}
+.badge-live    { background: #166534; color: #86efac; }
+.badge-delayed { background: #78350f; color: #fcd34d; }
+.badge-stale   { background: #7f1d1d; color: #fca5a5; }
+#vehicle-count { font-size: 11px; color: #aaa; }
+
+/* ── ALERT BANNER ── */
+.alert-banner {
+  background: #7f1d1d; color: #fca5a5;
+  padding: 8px 16px; font-size: 12px; line-height: 1.5;
+  flex-shrink: 0;
+}
+
+/* ── ROUTES PANEL ── */
+.routes-panel {
+  background: #fff; border-bottom: 1px solid #e5e7eb;
+  padding: 12px 16px; flex-shrink: 0; max-height: 200px; overflow-y: auto;
+}
+.routes-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 8px; }
+.route-card {
+  display: inline-flex; align-items: center; gap: 10px;
+  border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 14px;
+  margin: 0 6px 6px 0; cursor: pointer; background: #fff; font-size: 12px;
+  transition: all .1s;
+}
+.route-card:hover { border-color: #111; background: #f9f9f9; }
+.route-card.active { border-color: #111; background: #111; color: #fff; }
+.route-badge { font-weight: 800; font-size: 13px; }
+.route-time  { color: #666; font-size: 11px; }
+.route-card.active .route-time { color: #aaa; }
+
+/* ── ERROR ── */
+.error-box {
+  background: #fef2f2; border-left: 3px solid #ef4444;
+  padding: 10px 16px; font-size: 12px; color: #b91c1c; flex-shrink: 0;
+}
+
+/* ── LOADING ── */
+.loading {
+  padding: 10px 16px; font-size: 12px; color: #666;
+  background: #f9f9f9; border-bottom: 1px solid #eee; flex-shrink: 0;
+}
+
+/* ── MAP ── */
+#map { flex: 1; z-index: 0; }
+
+/* ── EMPTY STATE ── */
+.empty-state {
+  position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 12px 20px; font-size: 13px; color: #666;
+  box-shadow: 0 2px 12px rgba(0,0,0,.08); z-index: 500;
+}

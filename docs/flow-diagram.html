@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Vehicle Tracker — Request Flow</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#111;padding:36px 24px 80px}
+
+h1{text-align:center;font-size:18px;font-weight:800;margin-bottom:4px}
+.sub{text-align:center;font-size:11px;color:#666;margin-bottom:32px}
+
+/* ── GRID ── */
+.diagram{
+  display:grid;
+  grid-template-columns:200px 60px 200px 80px 260px 60px 160px;
+  grid-template-rows:auto;
+  gap:0;
+  max-width:1060px;
+  margin:0 auto;
+  align-items:center;
+}
+
+/* ── BOX ── */
+.box{border:2px solid #111;border-radius:8px;padding:12px 14px;background:#fff}
+.box-title{font-size:12px;font-weight:800;margin-bottom:5px}
+.box-sub{font-size:10px;color:#555;line-height:1.55}
+.box-tag{display:inline-block;font-size:9px;font-weight:700;border:1px solid #ccc;border-radius:4px;padding:1px 5px;margin-top:5px;color:#666;letter-spacing:.3px}
+
+/* ── REDIS BOX ── */
+.redis-box{border:2.5px solid #111;border-radius:10px;padding:14px;background:#fafafa;grid-column:5;grid-row:1/8;align-self:start}
+.redis-title{font-size:13px;font-weight:800;text-align:center;margin-bottom:12px;border-bottom:1px solid #ddd;padding-bottom:8px}
+.redis-section{margin-bottom:12px}
+.redis-section:last-child{margin-bottom:0}
+.redis-key{font-family:"SF Mono","Fira Code",monospace;font-size:10px;font-weight:700;background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:3px 7px;margin-bottom:4px;display:block}
+.redis-desc{font-size:10px;color:#555;line-height:1.5}
+.redis-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:5px;display:block}
+.redis-divider{border:none;border-top:1px dashed #ddd;margin:10px 0}
+
+/* ── ARROW ── */
+.arr{display:flex;align-items:center;justify-content:center;gap:0;flex-direction:column;font-size:10px;color:#555;font-weight:600;text-align:center}
+.arr-h{display:flex;align-items:center;gap:0;width:100%}
+.arr-line{flex:1;height:1.5px;background:#888}
+.arr-line-d{flex:1;height:0;border-top:1.5px dashed #888}
+.arr-line-dot{flex:1;height:0;border-top:1.5px dotted #555}
+.arr-head-r{width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:7px solid #888}
+.arr-head-l{width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-right:7px solid #888}
+.arr-both{display:flex;flex-direction:column;align-items:center;width:100%}
+.arr-label{font-size:9px;color:#555;font-weight:600;background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:1px 7px;margin:2px 0;white-space:nowrap}
+.arr-label-ws{border-style:dashed}
+.arr-label-ps{border-style:dotted}
+
+/* ── VERTICAL ARROW ── */
+.v-arr{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0}
+.v-line{width:1.5px;height:20px;background:#888}
+.v-line-d{width:0;height:20px;border-left:1.5px dashed #888}
+.v-head-d{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid #888}
+
+/* ── COLUMNS ── */
+.col-browser{grid-column:1}
+.col-arr1{grid-column:2}
+.col-fastapi{grid-column:3}
+.col-arr2{grid-column:4}
+.col-redis{grid-column:5}
+.col-arr3{grid-column:6}
+.col-external{grid-column:7}
+
+/* ── SPACER ── */
+.spacer{height:16px}
+
+/* ── LEGEND ── */
+.legend{max-width:1060px;margin:28px auto 0;display:flex;gap:20px;flex-wrap:wrap;padding:12px 16px;border:1px solid #ddd;border-radius:8px;background:#fafafa}
+.legend-title{font-size:11px;font-weight:800;width:100%;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:10px;color:#555}
+.l-solid{width:32px;height:1.5px;background:#888}
+.l-dashed{width:32px;height:0;border-top:1.5px dashed #888}
+.l-dotted{width:32px;height:0;border-top:1.5px dotted #555}
+
+/* ── FLOWS ── */
+.flows{max-width:1060px;margin:24px auto 0}
+.flows-title{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:0}
+.flow{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px solid #f0f0f0}
+.flow:last-child{border-bottom:none}
+.fn{width:22px;height:22px;border:2px solid #111;border-radius:50%;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.ft{flex:1;font-size:11px;color:#333;line-height:1.6}
+.ft strong{color:#111}
+.fp{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:5px}
+.node{font-family:"SF Mono","Fira Code",monospace;font-size:10px;font-weight:600;padding:2px 7px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;white-space:nowrap}
+.a{font-size:11px;color:#aaa}
+
+/* ── NOTE BOX ── */
+.note{max-width:1060px;margin:20px auto 0;border:1.5px solid #111;border-radius:8px;padding:14px 16px;background:#fafafa}
+.note-title{font-size:12px;font-weight:800;margin-bottom:8px}
+.note-body{font-size:11px;color:#444;line-height:1.65}
+.note-body strong{color:#111}
+</style>
+</head>
+<body>
+
+<h1>Vehicle Tracker — Full Request Flow</h1>
+<p class="sub">Two APIs · Redis Cache + Pub/Sub · WebSocket push · Multiple FastAPI instances</p>
+
+<!-- ════════════════════════════
+     MAIN DIAGRAM
+════════════════════════════ -->
+<div class="diagram">
+
+  <!-- ── ROW 1: Browser ── -->
+  <div class="box col-browser" style="text-align:center">
+    <div class="box-title">Browser</div>
+    <div class="box-sub">
+      Simple HTML form<br>
+      Source + Destination inputs<br>
+      Route list (after search)<br>
+      Leaflet map (after select)
+    </div>
+    <span class="box-tag">Frontend</span>
+  </div>
+
+  <div class="arr col-arr1">
+    <!-- HTTP plan request -->
+    <div class="arr-both">
+      <div class="arr-label">① POST /api/plan</div>
+      <div class="arr-h"><div class="arr-line"></div><div class="arr-head-r"></div></div>
+      <div class="arr-h"><div class="arr-head-l"></div><div class="arr-line"></div></div>
+      <div class="arr-label">routes list</div>
+    </div>
+    <div style="height:14px"></div>
+    <!-- WebSocket -->
+    <div class="arr-both">
+      <div class="arr-label arr-label-ws">② WS /ws/vehicles/{id}</div>
+      <div class="arr-h"><div class="arr-line-d"></div><div class="arr-head-r"></div></div>
+      <div class="arr-h" style="margin-top:6px"><div class="arr-head-l"></div><div class="arr-line-d"></div></div>
+      <div class="arr-label arr-label-ws">push positions</div>
+    </div>
+  </div>
+
+  <!-- FastAPI instances -->
+  <div class="col-fastapi" style="display:flex;flex-direction:column;gap:8px">
+    <div class="box" style="border-style:solid">
+      <div class="box-title">FastAPI Instance 1</div>
+      <div class="box-sub">
+        Handles HTTP + WebSocket<br>
+        In-memory: <code style="font-size:9px">{ route_id → [ws…] }</code><br>
+        Subscribes to Redis Pub/Sub<br>
+        Sticky session via LB
+      </div>
+      <span class="box-tag">Load balanced</span>
+    </div>
+    <div class="box" style="border-style:solid">
+      <div class="box-title">FastAPI Instance 2</div>
+      <div class="box-sub">
+        Same as Instance 1<br>
+        Its own WS connections in memory<br>
+        Also subscribed to Pub/Sub<br>
+        Receives same events
+      </div>
+      <span class="box-tag">Load balanced</span>
+    </div>
+  </div>
+
+  <!-- Arrows: FastAPI → Redis -->
+  <div class="col-arr2" style="display:flex;flex-direction:column;gap:8px;align-self:stretch;justify-content:center">
+    <!-- Read plan cache -->
+    <div class="arr-both">
+      <div class="arr-label" style="font-size:8px">read plan cache</div>
+      <div class="arr-h"><div class="arr-line"></div><div class="arr-head-r"></div></div>
+      <div class="arr-h"><div class="arr-head-l"></div><div class="arr-line"></div></div>
+      <div class="arr-label" style="font-size:8px">routes JSON</div>
+    </div>
+    <div style="height:8px"></div>
+    <!-- Read vehicles + Pub/Sub subscribe -->
+    <div class="arr-both">
+      <div class="arr-label" style="font-size:8px">read vehicles</div>
+      <div class="arr-h"><div class="arr-line"></div><div class="arr-head-r"></div></div>
+      <div class="arr-label arr-label-ps" style="font-size:8px">subscribe pub/sub</div>
+      <div class="arr-h"><div class="arr-line-dot"></div><div class="arr-head-r"></div></div>
+      <div class="arr-h" style="margin-top:4px"><div class="arr-head-l"></div><div class="arr-line-dot"></div></div>
+      <div class="arr-label arr-label-ps" style="font-size:8px">event → push WS</div>
+    </div>
+  </div>
+
+  <!-- REDIS (spans full height) -->
+  <div class="redis-box">
+    <div class="redis-title">Redis</div>
+
+    <span class="redis-label">① Route Planning Cache</span>
+    <span class="redis-key">plan:{hash(from+to)}</span>
+    <div class="redis-desc">
+      Stores Digitransit route results<br>
+      <strong>TTL: 5 minutes</strong><br>
+      Hit → return instantly, no API call<br>
+      Miss → call Digitransit, then store
+    </div>
+
+    <hr class="redis-divider"/>
+
+    <span class="redis-label">② Vehicle Positions Cache</span>
+    <span class="redis-key">vehicles:{route_id}</span>
+    <div class="redis-desc">
+      JSON array of bus positions<br>
+      <strong>TTL: 60 seconds</strong><br>
+      Written by Worker every 30s<br>
+      Read by FastAPI on WS connect
+    </div>
+
+    <hr class="redis-divider"/>
+
+    <span class="redis-label">③ Pub/Sub Channel</span>
+    <span class="redis-key">vehicles:updated</span>
+    <div class="redis-desc">
+      Worker publishes after every write<br>
+      All FastAPI instances subscribed<br>
+      Each pushes to its own WS clients<br>
+      <strong>Connections NOT stored here</strong><br>
+      WS connections live in FastAPI memory
+    </div>
+
+    <hr class="redis-divider"/>
+
+    <span class="redis-label">④ Geocoding Cache</span>
+    <span class="redis-key">geo:{address}</span>
+    <div class="redis-desc">
+      lat/lon for a typed address<br>
+      <strong>TTL: 24 hours</strong><br>
+      "Jyväskylä station" → coordinates<br>
+      Avoids repeat geocoding calls
+    </div>
+  </div>
+
+  <!-- Arrows: Redis ← Worker -->
+  <div class="col-arr3" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px">
+    <div class="arr-both">
+      <div class="arr-label" style="font-size:8px">write vehicles:{id}</div>
+      <div class="arr-h"><div class="arr-head-l"></div><div class="arr-line"></div></div>
+    </div>
+    <div style="height:6px"></div>
+    <div class="arr-both">
+      <div class="arr-label arr-label-ps" style="font-size:8px">publish event</div>
+      <div class="arr-h"><div class="arr-head-l"></div><div class="arr-line-dot"></div></div>
+    </div>
+  </div>
+
+  <!-- External column -->
+  <div class="col-external" style="display:flex;flex-direction:column;gap:10px">
+    <div class="box">
+      <div class="box-title">Waltti API</div>
+      <div class="box-sub">
+        GTFS-RT vehicle positions<br>
+        Binary protobuf<br>
+        <strong>Called by Worker only</strong><br>
+        Once per 30s — total
+      </div>
+      <span class="box-tag">External</span>
+    </div>
+
+    <div class="box" style="border-color:#555">
+      <div class="box-title">Ingestion Worker</div>
+      <div class="box-sub">
+        Separate process<br>
+        Every 30s: fetch → decode<br>
+        → write Redis → publish<br>
+        Never handles HTTP/WS
+      </div>
+      <span class="box-tag">Background</span>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Digitransit API</div>
+      <div class="box-sub">
+        GraphQL — route planning<br>
+        Source → Destination<br>
+        <strong>Called by FastAPI</strong><br>
+        Only on cache miss
+      </div>
+      <span class="box-tag">External</span>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Geocoding API</div>
+      <div class="box-sub">
+        Digitransit geocoding<br>
+        Address → lat/lon<br>
+        <strong>Called by FastAPI</strong><br>
+        Only on cache miss
+      </div>
+      <span class="box-tag">External</span>
+    </div>
+  </div>
+
+</div><!-- /diagram -->
+
+<!-- ── LEGEND ── -->
+<div class="legend">
+  <div class="legend-title">Arrow types</div>
+  <div class="legend-item"><div class="l-solid"></div> HTTP request / response</div>
+  <div class="legend-item"><div class="l-dashed"></div> WebSocket connection (persistent)</div>
+  <div class="legend-item"><div class="l-dotted"></div> Redis Pub/Sub (internal event)</div>
+</div>
+
+<!-- ── KEY ANSWER ── -->
+<div class="note">
+  <div class="note-title">Are WebSocket connections stored in Redis?</div>
+  <div class="note-body">
+    <strong>No — and they cannot be.</strong> A WebSocket is a live TCP connection object in memory. It cannot be serialised or stored in Redis.<br><br>
+    What Redis provides instead is <strong>Pub/Sub coordination</strong>. Each FastAPI instance keeps its own in-memory dictionary: <code style="font-size:10px;background:#eee;padding:1px 4px;border-radius:3px">{ route_id → [ws_client_1, ws_client_2, ...] }</code>. When the worker publishes to the <code style="font-size:10px;background:#eee;padding:1px 4px;border-radius:3px">vehicles:updated</code> channel, every FastAPI instance receives that event simultaneously and each pushes the update to its own locally connected WebSocket clients.<br><br>
+    The <strong>load balancer uses sticky sessions</strong> (consistent hashing on client IP or a session cookie) so each client stays connected to the same FastAPI instance for the lifetime of their WebSocket connection. If that instance dies, the client reconnects — the browser-side code retries automatically — and the load balancer routes them to a healthy instance.
+  </div>
+</div>
+
+<!-- ── FLOWS ── -->
+<div class="flows">
+  <div class="flows-title">Step-by-step flows</div>
+
+  <div class="flow">
+    <div class="fn">1</div>
+    <div class="ft">
+      <strong>User types "Jyväskylä station" → "University of Jyväskylä" and hits Search</strong><br>
+      FastAPI checks geocoding cache for both addresses. On miss: calls Digitransit Geocoding API → gets lat/lon → stores in Redis (24h TTL). Then checks route plan cache. On miss: calls Digitransit GraphQL with coordinates → gets list of itineraries → stores in Redis (5 min TTL) → returns to browser.
+      <div class="fp">
+        <span class="node">Browser POST /api/plan</span><span class="a">→</span>
+        <span class="node">FastAPI</span><span class="a">→ cache miss →</span>
+        <span class="node">Geocoding API → lat/lon</span><span class="a">→</span>
+        <span class="node">Digitransit GraphQL → routes</span><span class="a">→</span>
+        <span class="node">Redis write plan:{hash}</span><span class="a">→</span>
+        <span class="node">JSON routes → Browser</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="fn">2</div>
+    <div class="ft">
+      <strong>Same search again (within 5 minutes)</strong><br>
+      FastAPI checks Redis → cache hit → returns immediately. No Digitransit call, no geocoding call.
+      <div class="fp">
+        <span class="node">Browser POST /api/plan</span><span class="a">→</span>
+        <span class="node">FastAPI → Redis hit</span><span class="a">→</span>
+        <span class="node">JSON routes instantly</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="fn">3</div>
+    <div class="ft">
+      <strong>User selects a route — WebSocket opens</strong><br>
+      Browser opens WebSocket to /ws/vehicles/{route_id}. FastAPI immediately reads current positions from Redis and pushes — client sees buses on the map right away. FastAPI then subscribes to the Redis Pub/Sub channel and waits for worker updates.
+      <div class="fp">
+        <span class="node">Browser WS /ws/vehicles/4</span><span class="a">→</span>
+        <span class="node">FastAPI accept</span><span class="a">→</span>
+        <span class="node">Redis read vehicles:4</span><span class="a">→</span>
+        <span class="node">push JSON → map draws</span><span class="a">+</span>
+        <span class="node">subscribe vehicles:updated</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="fn">4</div>
+    <div class="ft">
+      <strong>Worker fires every 30 seconds</strong><br>
+      Worker fetches Waltti, decodes protobuf, writes all vehicle positions to Redis, publishes one event. All FastAPI instances receive the event via Pub/Sub. Each reads Redis and pushes to its own connected WebSocket clients. Every browser updates simultaneously — no polling from client side.
+      <div class="fp">
+        <span class="node">Worker → Waltti API</span><span class="a">→</span>
+        <span class="node">decode protobuf</span><span class="a">→</span>
+        <span class="node">Redis write vehicles:{id}</span><span class="a">→</span>
+        <span class="node">publish vehicles:updated</span><span class="a">→</span>
+        <span class="node">FastAPI 1 + FastAPI 2 receive</span><span class="a">→</span>
+        <span class="node">all WS clients updated</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="fn">5</div>
+    <div class="ft">
+      <strong>FastAPI Instance 1 crashes</strong><br>
+      Load balancer detects failure via health check. Clients on Instance 1 lose their WebSocket. Browser-side reconnect logic kicks in after 3 seconds — reconnects to Instance 2. FastAPI 2 reads current state from Redis and resumes pushing. No data is lost because state is in Redis, not in the crashed instance.
+      <div class="fp">
+        <span class="node">Instance 1 crash</span><span class="a">→</span>
+        <span class="node">LB removes it</span><span class="a">→</span>
+        <span class="node">Browser reconnects after 3s</span><span class="a">→</span>
+        <span class="node">Instance 2 → reads Redis → resumes push</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
