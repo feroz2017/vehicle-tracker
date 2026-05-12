@@ -33,3 +33,6 @@ htmlcov/
 
 # Docker
 *.log
+
+
+docs
