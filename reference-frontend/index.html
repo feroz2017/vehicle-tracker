@@ -13,7 +13,6 @@
 <header>
   <div class="header-title">Vehicle Tracker</div>
 
-  <!-- Search form -->
   <div class="search-bar">
     <div class="search-field">
       <label>From</label>
@@ -28,7 +27,6 @@
     <button id="btn-search" onclick="search()">Search</button>
   </div>
 
-  <!-- Status bar -->
   <div id="status-bar" class="status-bar hidden">
     <span id="freshness-badge" class="badge">—</span>
     <span id="vehicle-count"></span>
@@ -40,7 +38,10 @@
 
 <!-- ── ROUTES PANEL ── -->
 <div id="routes-panel" class="routes-panel hidden">
-  <div class="routes-panel-title">Available routes</div>
+  <div class="routes-panel-header">
+    <span class="routes-panel-title">Available routes</span>
+    <button class="btn-clear" onclick="clearSearch()">Clear</button>
+  </div>
   <div id="routes-list"></div>
 </div>
 

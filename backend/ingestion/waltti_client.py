@@ -1,15 +1,15 @@
 import httpx
-from config import WALTTI_API_KEY, WALTTI_BASE_URL
+from config import WALTTI_ID, WALTTI_SECRET, WALTTI_BASE_URL
 
 
-def _headers() -> dict:
+def _auth() -> tuple[str, str] | None:
     """
-    Build auth headers for Waltti API.
-    TODO: confirm exact header name with team once API key is received.
+    Waltti uses HTTP Basic Auth: (id, secret).
+    Returns None if credentials are not set — caller falls back to dummy data.
     """
-    if not WALTTI_API_KEY:
-        return {}
-    return {"x-api-key": WALTTI_API_KEY}
+    if WALTTI_ID and WALTTI_SECRET:
+        return (WALTTI_ID, WALTTI_SECRET)
+    return None
 
 
 async def fetch_vehicle_positions() -> bytes:
@@ -17,13 +17,16 @@ async def fetch_vehicle_positions() -> bytes:
     Fetch live vehicle positions from Waltti GTFS-RT feed.
     Returns raw protobuf bytes — decoded by gtfs_parser.py.
 
-    Feed URL: {WALTTI_BASE_URL}/gtfs-rt/vehicle-positions
-    TODO: confirm exact URL path from opendata.waltti.fi/docs
+    Confirmed URL: {WALTTI_BASE_URL}/vehicleposition
+    Auth: HTTP Basic (WALTTI_ID:WALTTI_SECRET)
     """
-    url = f"{WALTTI_BASE_URL}/gtfs-rt/vehicle-positions"
+    auth = _auth()
+    if not auth:
+        return b""   # dummy mode — worker will use cached dummy data
 
+    url = f"{WALTTI_BASE_URL}/vehicleposition"
     async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(url, headers=_headers())
+        response = await client.get(url, auth=auth)
         response.raise_for_status()
         return response.content
 
@@ -33,13 +36,16 @@ async def fetch_trip_updates() -> bytes:
     Fetch trip updates (delays per stop) from Waltti GTFS-RT feed.
     Returns raw protobuf bytes — decoded by gtfs_parser.py.
 
-    Feed URL: {WALTTI_BASE_URL}/gtfs-rt/trip-updates
-    TODO: confirm exact URL path from opendata.waltti.fi/docs
+    Confirmed URL: {WALTTI_BASE_URL}/tripupdate
+    Auth: HTTP Basic (WALTTI_ID:WALTTI_SECRET)
     """
-    url = f"{WALTTI_BASE_URL}/gtfs-rt/trip-updates"
+    auth = _auth()
+    if not auth:
+        return b""
 
+    url = f"{WALTTI_BASE_URL}/tripupdate"
     async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(url, headers=_headers())
+        response = await client.get(url, auth=auth)
         response.raise_for_status()
         return response.content
 
@@ -47,14 +53,20 @@ async def fetch_trip_updates() -> bytes:
 async def fetch_alerts() -> bytes:
     """
     Fetch service alerts from Waltti GTFS-RT feed.
-    Returns raw protobuf bytes — decoded by gtfs_parser.py.
 
-    Feed URL: {WALTTI_BASE_URL}/gtfs-rt/alerts
-    TODO: confirm exact URL path from opendata.waltti.fi/docs
+    NOTE: The Waltti /alert endpoint returns 404 for LINKKI (Jyväskylä).
+    LINKKI does not currently publish a GTFS-RT alerts feed.
+    This function returns empty bytes — the app falls back to no alerts shown.
+
+    If Waltti adds an alert feed in future, uncomment the real fetch below.
     """
-    url = f"{WALTTI_BASE_URL}/gtfs-rt/alerts"
+    return b""
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(url, headers=_headers())
-        response.raise_for_status()
-        return response.content
+    # auth = _auth()
+    # if not auth:
+    #     return b""
+    # url = f"{WALTTI_BASE_URL}/alert"
+    # async with httpx.AsyncClient(timeout=10) as client:
+    #     response = await client.get(url, auth=auth)
+    #     response.raise_for_status()
+    #     return response.content

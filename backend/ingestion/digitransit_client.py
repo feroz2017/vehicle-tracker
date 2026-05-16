@@ -24,9 +24,12 @@ async def geocode(query: str) -> dict:
     """
     url = f"{DIGITRANSIT_BASE_URL}/geocoding/v1/search"
     params = {
-        "text":  query,
-        "lang":  "fi",
-        "size":  5,   # max results
+        "text":             query,
+        "lang":             "fi",
+        "size":             5,
+        # Bias results toward Jyväskylä city centre
+        "focus.point.lat":  62.2416,
+        "focus.point.lon":  25.7209,
     }
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -44,12 +47,10 @@ async def plan_route(
     """
     Find routes between two coordinates using Digitransit routing API.
 
-    Endpoint: POST /routing/v2/routers/finland/index/graphql
+    Endpoint: POST /routing/v2/waltti/gtfs/v1  (Waltti-region routes — covers LINKKI)
     Returns raw GraphQL JSON — parsed by processing/route_planner.py
-
-    TODO: adjust numItineraries, transportModes, and date/time once API key confirmed.
     """
-    url = f"{DIGITRANSIT_BASE_URL}/routing/v2/routers/finland/index/graphql"
+    url = f"{DIGITRANSIT_BASE_URL}/routing/v2/waltti/gtfs/v1"
 
     # GraphQL query — returns up to 5 route options
     query = """
@@ -71,6 +72,7 @@ async def plan_route(
             from { name }
             to   { name }
             route { gtfsId shortName }
+            legGeometry { points }
           }
         }
       }
@@ -90,3 +92,42 @@ async def plan_route(
         )
         response.raise_for_status()
         return response.json()
+
+
+async def fetch_trip_shape(trip_id: str) -> list:
+    """
+    Return the full road-snapped shape for a trip as [[lat, lon], ...].
+
+    Digitransit stores shapes in pattern.geometry — these are the actual GPS
+    coordinates the vehicle follows along the road network, not straight lines.
+    trip_id is the raw GTFS trip_id (without the LINKKI: feed prefix); we add
+    the prefix here when calling the GraphQL API.
+
+    Returns [] if the trip is unknown or the API fails.
+    """
+    url   = f"{DIGITRANSIT_BASE_URL}/routing/v2/waltti/gtfs/v1"
+    query = """
+    {
+      trip(id: "LINKKI:%s") {
+        pattern {
+          geometry { lat lon }
+        }
+      }
+    }
+    """ % trip_id
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            url,
+            headers={**_headers(), "Content-Type": "application/json"},
+            json={"query": query},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    trip = (data.get("data") or {}).get("trip")
+    if not trip:
+        return []
+
+    geometry = (trip.get("pattern") or {}).get("geometry") or []
+    return [[p["lat"], p["lon"]] for p in geometry if p.get("lat") is not None]

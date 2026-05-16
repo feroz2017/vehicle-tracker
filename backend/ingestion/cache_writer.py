@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import asdict
 from config import VEHICLE_CACHE_TTL, ALERTS_CACHE_TTL
 
 logger = logging.getLogger(__name__)
@@ -7,33 +8,34 @@ logger = logging.getLogger(__name__)
 PUBSUB_CHANNEL = "vehicles:updated"
 
 
-async def write_vehicles(redis, vehicles: list[dict]) -> None:
+async def write_vehicles(redis, vehicles: list, fetched_at: float) -> None:
     """
-    Store vehicle positions in Redis, grouped by route_id.
-    Publishes PUBSUB_CHANNEL event after writing so FastAPI WebSocket
-    handlers push fresh data to connected clients.
+    Store enriched Vehicle objects in Redis, grouped by route_id.
 
-    Key pattern:  vehicles:{route_id}
-    TTL:          VEHICLE_CACHE_TTL (60s) — survives one missed worker cycle
+    Keys written:
+      vehicles:{route_id}  → JSON list of vehicle dicts (TTL: VEHICLE_CACHE_TTL)
+      vehicles:fetched_at  → unix timestamp string (so WS can compute live freshness)
+      vehicles:route_ids   → JSON list of all active route IDs
+
+    Publishes to PUBSUB_CHANNEL so every FastAPI instance pushes to its WebSocket clients.
     """
-    # Group vehicles by route_id
     by_route: dict[str, list[dict]] = {}
     for v in vehicles:
-        route_id = v.get("route_id")
-        if not route_id:
+        if not v.route_id:
             continue
-        by_route.setdefault(route_id, []).append(v)
+        d = asdict(v)
+        d["delay_label"] = v.delay_label   # include computed property
+        by_route.setdefault(v.route_id, []).append(d)
 
-    # Write each route's vehicles to Redis
     for route_id, route_vehicles in by_route.items():
-        key = f"vehicles:{route_id}"
-        await redis.set(key, json.dumps(route_vehicles), ex=VEHICLE_CACHE_TTL)
+        await redis.set(f"vehicles:{route_id}", json.dumps(route_vehicles), ex=VEHICLE_CACHE_TTL)
 
-    # Also write the full set for /api/routes (route ID discovery)
     all_route_ids = sorted(by_route.keys())
     await redis.set("vehicles:route_ids", json.dumps(all_route_ids), ex=VEHICLE_CACHE_TTL)
 
-    # Notify all FastAPI instances that new data is available
+    # Store fetch timestamp separately — WS reads this to compute freshness at send time
+    await redis.set("vehicles:fetched_at", str(fetched_at), ex=VEHICLE_CACHE_TTL)
+
     await redis.publish(PUBSUB_CHANNEL, "updated")
     logger.info("Wrote %d routes to Redis, published to %s", len(by_route), PUBSUB_CHANNEL)
 

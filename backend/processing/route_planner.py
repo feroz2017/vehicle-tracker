@@ -2,6 +2,35 @@ from processing.models import Route, RouteLeg, Location, PlanResult
 from datetime import datetime
 
 
+def _decode_polyline(encoded: str) -> list[list[float]]:
+    """
+    Decode Google's encoded polyline format into [[lat, lon], ...] pairs.
+    Digitransit returns leg geometry in this format via legGeometry.points.
+    """
+    coords = []
+    index  = 0
+    lat = lng = 0
+
+    while index < len(encoded):
+        for is_lng in (False, True):
+            shift = result = 0
+            while True:
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1F) << shift
+                shift  += 5
+                if b < 0x20:
+                    break
+            delta = ~(result >> 1) if result & 1 else result >> 1
+            if is_lng:
+                lng += delta
+            else:
+                lat += delta
+        coords.append([lat / 1e5, lng / 1e5])
+
+    return coords
+
+
 def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> PlanResult:
     """
     Convert Digitransit route planning GraphQL response into a PlanResult.
@@ -28,6 +57,9 @@ def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> Plan
             start_ms = leg.get("startTime", 0)
             end_ms   = leg.get("endTime", 0)
 
+            encoded = (leg.get("legGeometry") or {}).get("points", "")
+            geometry = _decode_polyline(encoded) if encoded else []
+
             legs.append(RouteLeg(
                 mode=leg.get("mode", "WALK"),
                 route_id=route_info.get("gtfsId"),
@@ -38,6 +70,7 @@ def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> Plan
                 arrival_time=_ms_to_time(end_ms),
                 duration_minutes=int(leg.get("duration", 0) / 60),
                 distance_meters=leg.get("distance", 0.0),
+                geometry=geometry,
             ))
 
         if not legs:
@@ -47,8 +80,14 @@ def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> Plan
         transit_legs = [l for l in legs if l.mode != "WALK"]
         main_leg     = transit_legs[0] if transit_legs else legs[0]
 
+        # Strip feed prefix from gtfsId (e.g. "LINKKI:903" → "903")
+        # so the route_id matches the raw route_id in the GTFS-RT vehicle feed
+        # and the WebSocket can find the right Redis key.
+        raw_id   = main_leg.route_id or ""
+        route_id = raw_id.split(":")[-1] if ":" in raw_id else (raw_id or "WALK")
+
         routes.append(Route(
-            route_id=main_leg.route_id or "WALK",
+            route_id=route_id,
             route_name=main_leg.route_name or "Walk",
             departure_time=legs[0].departure_time,
             arrival_time=legs[-1].arrival_time,

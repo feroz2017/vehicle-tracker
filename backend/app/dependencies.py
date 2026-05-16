@@ -1,13 +1,15 @@
 import logging
-import redis.asyncio as aioredis
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 logger = logging.getLogger(__name__)
 
 
-async def get_redis(request: Request):
+async def get_redis(request: HTTPConnection):
     """
     Inject the shared Redis client into route handlers.
-    Returns None if Redis is not available — routes fall back to dummy data.
+
+    Uses HTTPConnection (base class of both Request and WebSocket) so this
+    dependency works for both HTTP endpoints and WebSocket endpoints.
+    Returns None if Redis is unavailable — routes fall back gracefully.
     """
     return getattr(request.app.state, "redis", None)

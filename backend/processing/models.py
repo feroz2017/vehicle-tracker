@@ -91,6 +91,7 @@ class RouteLeg:
     arrival_time:     str           # "14:45"
     duration_minutes: int
     distance_meters:  float
+    geometry:         list = field(default_factory=list)  # [[lat, lon], ...] decoded from legGeometry
 
 
 @dataclass

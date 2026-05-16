@@ -3,19 +3,30 @@
    This file will be replaced by the frontend team.
    ════════════════════════════════════════════════════════════════════════════ */
 
-const API_BASE = "";          // same origin — FastAPI serves this file
+const API_BASE    = "";       // same origin — FastAPI serves this file
 const DEBOUNCE_MS = 400;      // geocode debounce delay
+const WS_RETRY_MS = 5000;     // WebSocket reconnect interval
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let map, markers = {}, selectedRoute = null, ws = null;
 let fromLocation = null, toLocation = null;
+let routeLines = [];      // active Leaflet polylines for the selected route
+let routesData = [];      // full route objects from last /api/plan response
 
 // ── Init map ──────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-  map = L.map("map").setView([62.2416, 25.7209], 13);
+  map = L.map("map").setView([62.2416, 25.7209], 13);  // Jyväskylä city centre
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap contributors",
   }).addTo(map);
+
+  // Enter key triggers search from either input
+  document.getElementById("input-from").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+  document.getElementById("input-to").addEventListener("keydown",   e => { if (e.key === "Enter") search(); });
+
+  // Geocode on input (debounced)
+  document.getElementById("input-from").addEventListener("input", () => onInput("from"));
+  document.getElementById("input-to").addEventListener("input",   () => onInput("to"));
 });
 
 // ── Geocoding (debounced) ─────────────────────────────────────────────────────
@@ -38,6 +49,16 @@ async function fetchSuggestions(field) {
     const data = await res.json();
 
     list.innerHTML = "";
+
+    if (!data || data.length === 0) {
+      const li = document.createElement("li");
+      li.className   = "no-results";
+      li.textContent = "No locations found";
+      list.appendChild(li);
+      list.classList.remove("hidden");
+      return;
+    }
+
     data.forEach(loc => {
       const li = document.createElement("li");
       li.textContent = loc.name;
@@ -45,7 +66,7 @@ async function fetchSuggestions(field) {
       list.appendChild(li);
     });
 
-    list.classList.toggle("hidden", data.length === 0);
+    list.classList.remove("hidden");
   } catch (e) {
     console.error("Geocode error:", e);
   }
@@ -54,7 +75,6 @@ async function fetchSuggestions(field) {
 function selectLocation(field, loc) {
   document.getElementById(`input-${field}`).value = loc.name;
   document.getElementById(`suggestions-${field}`).classList.add("hidden");
-
   if (field === "from") fromLocation = loc;
   else                  toLocation   = loc;
 }
@@ -66,10 +86,6 @@ document.addEventListener("click", e => {
   }
 });
 
-// Wire up input events
-document.getElementById("input-from").addEventListener("input", () => onInput("from"));
-document.getElementById("input-to").addEventListener("input",   () => onInput("to"));
-
 // ── Search ────────────────────────────────────────────────────────────────────
 async function search() {
   if (!fromLocation || !toLocation) {
@@ -80,9 +96,14 @@ async function search() {
   showLoading(true);
   hideError();
   document.getElementById("routes-panel").classList.add("hidden");
+  closeWebSocket();
+  clearMarkers();
+  clearRouteLines();
+  document.getElementById("status-bar").classList.add("hidden");
+  document.getElementById("empty-state").classList.add("hidden");
 
   try {
-    const res  = await fetch(`${API_BASE}/api/plan`, {
+    const res = await fetch(`${API_BASE}/api/plan`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -96,8 +117,15 @@ async function search() {
     });
 
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Planning failed");
 
+    if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+
+    if (!data.routes || data.routes.length === 0) {
+      showError("No routes found between these two locations.");
+      return;
+    }
+
+    routesData = data.routes;
     renderRoutes(data.routes);
   } catch (e) {
     showError("Could not find routes. " + e.message);
@@ -106,25 +134,49 @@ async function search() {
   }
 }
 
+// ── Clear search ──────────────────────────────────────────────────────────────
+function clearSearch() {
+  closeWebSocket();
+  clearMarkers();
+  clearRouteLines();
+  fromLocation = toLocation = selectedRoute = null;
+  routesData = [];
+
+  document.getElementById("input-from").value = "";
+  document.getElementById("input-to").value   = "";
+  document.getElementById("routes-panel").classList.add("hidden");
+  document.getElementById("status-bar").classList.add("hidden");
+  document.getElementById("alert-banner").classList.add("hidden");
+  document.getElementById("empty-state").classList.add("hidden");
+  hideError();
+}
+
 // ── Render route cards ────────────────────────────────────────────────────────
 function renderRoutes(routes) {
   const panel = document.getElementById("routes-panel");
   const list  = document.getElementById("routes-list");
-
-  if (!routes || routes.length === 0) {
-    showError("No routes found between these locations.");
-    return;
-  }
-
   list.innerHTML = "";
+
   routes.forEach(route => {
     const card = document.createElement("div");
-    card.className = "route-card";
+    card.className       = "route-card";
     card.dataset.routeId = route.route_id;
+
+    const legSummary = buildLegSummary(route.legs);
+    const walkLabel  = route.walk_distance_meters
+      ? `${Math.round(route.walk_distance_meters)}m walk`
+      : "";
+
     card.innerHTML = `
-      <span class="route-badge">${route.route_id}</span>
-      <span>${route.route_name}</span>
-      <span class="route-time">${route.departure_time} → ${route.arrival_time} (${route.duration_minutes} min)</span>
+      <span class="route-badge">${route.route_name || route.route_id}</span>
+      <div class="route-card-body">
+        <div class="route-leg-summary">${legSummary}</div>
+        <div class="route-time">
+          ${route.departure_time} → ${route.arrival_time}
+          &nbsp;·&nbsp; ${route.duration_minutes} min
+          ${walkLabel ? `&nbsp;·&nbsp; ${walkLabel}` : ""}
+        </div>
+      </div>
     `;
     card.onclick = () => selectRoute(route.route_id, card);
     list.appendChild(card);
@@ -133,81 +185,295 @@ function renderRoutes(routes) {
   panel.classList.remove("hidden");
 }
 
+function buildLegSummary(legs) {
+  if (!legs || legs.length === 0) return "";
+  return legs
+    .map(leg => leg.mode === "WALK"
+      ? `Walk${leg.duration_minutes ? " " + leg.duration_minutes + " min" : ""}`
+      : `Bus ${leg.route_name || leg.route_id}`)
+    .join(" → ");
+}
+
 // ── Select route → open WebSocket ────────────────────────────────────────────
 function selectRoute(routeId, card) {
-  // Update active card styling
   document.querySelectorAll(".route-card").forEach(c => c.classList.remove("active"));
   card.classList.add("active");
 
-  // Close existing WebSocket
-  if (ws) { ws.close(); ws = null; }
+  closeWebSocket();
   clearMarkers();
-  document.getElementById("status-bar").classList.remove("hidden");
+  clearRouteLines();
   selectedRoute = routeId;
 
-  // Fetch alerts for this route
-  fetchAlerts(routeId);
+  // Draw the route geometry for this route
+  const route = routesData.find(r => r.route_id === routeId);
+  if (route) drawRoute(route);
 
-  // Open WebSocket
+  document.getElementById("status-bar").classList.remove("hidden");
+  document.getElementById("empty-state").classList.remove("hidden");
+
+  // Show "Connecting…" immediately so the user sees feedback
+  const badge = document.getElementById("freshness-badge");
+  badge.className   = "badge badge-stale";
+  badge.textContent = "Connecting…";
+  document.getElementById("vehicle-count").textContent = "";
+
+  fetchAlerts(routeId);
   openWebSocket(routeId);
+}
+
+function closeWebSocket() {
+  if (ws) {
+    ws.onclose = null;  // prevent auto-reconnect on intentional close
+    ws.close();
+    ws = null;
+  }
 }
 
 function openWebSocket(routeId) {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const url      = `${protocol}://${location.host}/ws/vehicles/${routeId}`;
+  ws = new WebSocket(`${protocol}://${location.host}/ws/vehicles/${routeId}`);
 
-  ws = new WebSocket(url);
-
-  ws.onopen = () => console.log(`WebSocket opened for route ${routeId}`);
+  ws.onopen = () => console.log(`WS opened: route=${routeId}`);
 
   ws.onmessage = event => {
     const data = JSON.parse(event.data);
     updateFreshness(data.freshness);
-    updateMarkers(data.vehicles);
-    updateVehicleCount(data.vehicle_count);
-    document.getElementById("empty-state").classList.toggle("hidden", data.vehicle_count > 0);
+    updateMarkers(data.vehicles || []);
+    updateVehicleCount(data.vehicle_count || 0);
+    document.getElementById("empty-state")
+      .classList.toggle("hidden", (data.vehicle_count || 0) > 0);
   };
 
-  ws.onerror = err => {
-    console.error("WebSocket error:", err);
-    showError("Live connection error. Retrying in 5s…");
+  ws.onerror = () => {
+    showError("Live connection error. Reconnecting in 5s…");
   };
 
   ws.onclose = () => {
-    console.log("WebSocket closed, reconnecting in 5s…");
+    console.log(`WS closed: route=${routeId}, retrying in ${WS_RETRY_MS}ms`);
     setTimeout(() => {
       if (selectedRoute === routeId) openWebSocket(routeId);
-    }, 5000);
+    }, WS_RETRY_MS);
   };
 }
 
-// ── Markers ───────────────────────────────────────────────────────────────────
-function updateMarkers(vehicles) {
+// ── Road-following bus animation ──────────────────────────────────────────────
+//
+// Strategy:
+//   1. When a vehicle update arrives we know its GPS position and speed.
+//   2. We fetch the trip's full road shape from /api/shape/{trip_id} once
+//      and cache it in `shapeCache`.
+//   3. We find the closest shape point to the reported GPS position.
+//   4. Using the reported speed we compute how far the bus will travel in the
+//      next ~30 s (the worker cycle) and build a path of shape points ahead.
+//   5. A requestAnimationFrame loop walks the marker along those shape points
+//      so it follows the road exactly instead of cutting across in a straight
+//      line.
+//
+// If shape data is unavailable we fall back to placing the marker directly at
+// the GPS coordinates (same behaviour as before, no animation).
+
+const shapeCache = {};   // trip_id → [[lat,lon],...]  (fetched once, cached forever)
+const animState  = {};   // vehicle_id → { marker, path, pathIdx, lastTs, mPerMs, bearing }
+
+async function _fetchShape(tripId) {
+  if (!tripId) return null;
+  if (shapeCache[tripId] !== undefined) return shapeCache[tripId];
+  shapeCache[tripId] = null;   // mark as "in-flight" to avoid duplicate requests
+  try {
+    const res  = await fetch(`${API_BASE}/api/shape/${encodeURIComponent(tripId)}`);
+    const data = await res.json();
+    shapeCache[tripId] = (data.points && data.points.length > 1) ? data.points : null;
+  } catch (e) {
+    console.warn("Shape fetch failed:", tripId, e);
+    shapeCache[tripId] = null;
+  }
+  return shapeCache[tripId];
+}
+
+// Squared distance between two [lat,lon] pairs — cheap proxy for "closest point"
+function _dist2(a, b) {
+  const dlat = a[0] - b[0], dlon = a[1] - b[1];
+  return dlat * dlat + dlon * dlon;
+}
+
+// Find index of the shape point closest to [lat, lon]
+function _closestIdx(shape, lat, lon) {
+  let best = 0, bestD = Infinity;
+  const pt = [lat, lon];
+  for (let i = 0; i < shape.length; i++) {
+    const d = _dist2(shape[i], pt);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// Haversine distance in metres between two [lat,lon] pairs
+function _haversine(a, b) {
+  const R  = 6371000;
+  const φ1 = a[0] * Math.PI / 180, φ2 = b[0] * Math.PI / 180;
+  const Δφ = (b[0] - a[0]) * Math.PI / 180;
+  const Δλ = (b[1] - a[1]) * Math.PI / 180;
+  const s  = Math.sin(Δφ / 2), c = Math.sin(Δλ / 2);
+  const x  = s * s + Math.cos(φ1) * Math.cos(φ2) * c * c;
+  return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+// Build an array of waypoints along `shape` starting from `startIdx` covering
+// at least `targetMeters` of road distance.  Returns [] if shape is too short.
+function _pathAhead(shape, startIdx, targetMeters) {
+  const path = [shape[startIdx]];
+  let dist = 0;
+  for (let i = startIdx + 1; i < shape.length; i++) {
+    dist += _haversine(shape[i - 1], shape[i]);
+    path.push(shape[i]);
+    if (dist >= targetMeters) break;
+  }
+  return path.length > 1 ? path : [];
+}
+
+// Bearing in degrees from point a to point b
+function _bearing(a, b) {
+  const φ1 = a[0] * Math.PI / 180, φ2 = b[0] * Math.PI / 180;
+  const Δλ = (b[1] - a[1]) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// rAF loop — runs for every tracked vehicle independently
+function _tickVehicle(vid, ts) {
+  const s = animState[vid];
+  if (!s || !s.marker || s.path.length < 2) return;
+
+  const elapsed = ts - s.lastTs;     // ms since last rAF
+  s.lastTs = ts;
+  s.travelled += elapsed * s.mPerMs; // metres along the path so far
+
+  // Walk through path segments until we've consumed `travelled` metres
+  while (s.segIdx < s.path.length - 1) {
+    const segLen = _haversine(s.path[s.segIdx], s.path[s.segIdx + 1]);
+    if (s.travelled <= segLen) break;
+    s.travelled -= segLen;
+    s.segIdx++;
+  }
+
+  if (s.segIdx >= s.path.length - 1) {
+    // Reached the end of our projected path — hold at last point
+    s.marker.setLatLng(s.path[s.path.length - 1]);
+    return;   // don't schedule another frame; next WS update will restart
+  }
+
+  // Interpolate between current and next shape point
+  const a   = s.path[s.segIdx];
+  const b   = s.path[s.segIdx + 1];
+  const seg = _haversine(a, b);
+  const t   = seg > 0 ? Math.min(s.travelled / seg, 1) : 0;
+  const lat = a[0] + t * (b[0] - a[0]);
+  const lon = a[1] + t * (b[1] - a[1]);
+
+  s.marker.setLatLng([lat, lon]);
+
+  // Update icon bearing from road direction (only if colour bucket unchanged)
+  const roadBearing = _bearing(a, b);
+  const icon = buildBusIcon(roadBearing, s.delaySeconds);
+  const prev = s.marker.options._delayBucket;
+  const next = _delayBucket(s.delaySeconds);
+  if (prev !== next) {
+    s.marker.setIcon(icon);
+    s.marker.options._delayBucket = next;
+  } else if (Math.abs(roadBearing - (s.lastBearing || 0)) > 5) {
+    // Bearing changed enough to be visible — rebuild icon
+    s.marker.setIcon(buildBusIcon(roadBearing, s.delaySeconds));
+    s.lastBearing = roadBearing;
+  }
+
+  s.rafId = requestAnimationFrame(t2 => _tickVehicle(vid, t2));
+}
+
+function _stopAnim(vid) {
+  const s = animState[vid];
+  if (s && s.rafId) { cancelAnimationFrame(s.rafId); s.rafId = null; }
+}
+
+async function updateMarkers(vehicles) {
   const seen = new Set();
 
-  vehicles.forEach(v => {
+  for (const v of vehicles) {
     seen.add(v.id);
-    const latlng = [v.lat, v.lon];
-    const icon   = buildBusIcon(v.bearing, v.delay_seconds);
-    const popup  = buildPopup(v);
+    const popup = buildPopup(v);
 
-    if (markers[v.id]) {
-      markers[v.id].setLatLng(latlng).setIcon(icon).setPopupContent(popup);
+    // ── create marker if new ──────────────────────────────────────────────
+    if (!markers[v.id]) {
+      const icon   = buildBusIcon(v.bearing, v.delay_seconds);
+      const marker = L.marker([v.lat, v.lon], { icon }).bindPopup(popup).addTo(map);
+      marker.options._delayBucket = _delayBucket(v.delay_seconds);
+      markers[v.id] = marker;
     } else {
-      markers[v.id] = L.marker(latlng, { icon }).bindPopup(popup).addTo(map);
+      markers[v.id].setPopupContent(popup);
     }
-  });
 
-  // Remove markers for buses no longer in feed
+    const marker = markers[v.id];
+
+    // ── try road-following animation ──────────────────────────────────────
+    const shape = await _fetchShape(v.trip_id);
+
+    if (shape) {
+      _stopAnim(v.id);
+
+      const startIdx     = _closestIdx(shape, v.lat, v.lon);
+      const speedMps     = (v.speed_kmh || 30) / 3.6;   // default 30 km/h when unknown
+      const targetMeters = speedMps * 30;                // distance in one 30s cycle
+      const path         = _pathAhead(shape, startIdx, targetMeters);
+
+      if (path.length >= 2) {
+        // Place marker exactly at the GPS-reported position to start
+        marker.setLatLng([v.lat, v.lon]);
+        animState[v.id] = {
+          marker,
+          path,
+          segIdx:       0,
+          travelled:    0,
+          mPerMs:       speedMps / 1000,
+          lastTs:       performance.now(),
+          delaySeconds: v.delay_seconds || 0,
+          lastBearing:  v.bearing || 0,
+        };
+        animState[v.id].rafId = requestAnimationFrame(ts => _tickVehicle(v.id, ts));
+        continue;   // skip plain setLatLng below
+      }
+    }
+
+    // ── fallback: plain marker placement (no shape available yet) ─────────
+    marker.setLatLng([v.lat, v.lon]);
+    const prev = marker.options._delayBucket;
+    const next = _delayBucket(v.delay_seconds);
+    if (prev !== next) {
+      marker.setIcon(buildBusIcon(v.bearing, v.delay_seconds));
+      marker.options._delayBucket = next;
+    }
+  }
+
+  // Remove markers for buses no longer in the feed
   Object.keys(markers).forEach(id => {
-    if (!seen.has(id)) { map.removeLayer(markers[id]); delete markers[id]; }
+    if (!seen.has(id)) {
+      _stopAnim(id);
+      delete animState[id];
+      map.removeLayer(markers[id]);
+      delete markers[id];
+    }
   });
 }
 
+// Returns 0 / 1 / 2 — used to detect delay colour changes without icon rebuild
+function _delayBucket(delaySeconds) {
+  const d = delaySeconds || 0;
+  return d > 180 ? 2 : d > 60 ? 1 : 0;
+}
+
 function buildBusIcon(bearing, delaySeconds) {
-  // Green = on time, yellow = slightly late, red = 3+ min late
-  const color = delaySeconds > 180 ? "#ef4444"
-              : delaySeconds > 60  ? "#f59e0b"
+  const delay = delaySeconds || 0;
+  const color = delay > 180 ? "#ef4444"
+              : delay > 60  ? "#f59e0b"
               : "#22c55e";
 
   return L.divIcon({
@@ -225,21 +491,60 @@ function buildBusIcon(bearing, delaySeconds) {
 }
 
 function buildPopup(v) {
+  const stops = (v.current_stop || v.next_stop)
+    ? `<div style="color:#666;margin-bottom:4px">${v.current_stop || "—"} → ${v.next_stop || "—"}</div>`
+    : "";
+
   return `
     <div style="min-width:180px;font-size:12px;">
-      <strong>Route ${v.route_id} — Bus ${v.label}</strong><br>
-      <span style="color:#666">${v.current_stop || "—"} → ${v.next_stop || "—"}</span>
+      <strong>Route ${v.route_id} — Bus ${v.label || v.id}</strong>
+      ${stops}
       <hr style="margin:6px 0;border:none;border-top:1px solid #eee;">
       <table style="width:100%">
-        <tr><td style="color:#888">Delay</td>  <td><strong>${v.delay_label}</strong></td></tr>
-        <tr><td style="color:#888">Speed</td>  <td>${v.speed_kmh ?? "?"} km/h</td></tr>
+        <tr><td style="color:#888">Delay</td><td><strong>${v.delay_label || "Unknown"}</strong></td></tr>
+        <tr><td style="color:#888">Speed</td><td>${v.speed_kmh != null ? v.speed_kmh + " km/h" : "—"}</td></tr>
       </table>
     </div>`;
 }
 
 function clearMarkers() {
-  Object.values(markers).forEach(m => map.removeLayer(m));
+  Object.keys(markers).forEach(id => {
+    _stopAnim(id);
+    delete animState[id];
+    map.removeLayer(markers[id]);
+  });
   markers = {};
+}
+
+// ── Route polylines ───────────────────────────────────────────────────────────
+function drawRoute(route) {
+  const bounds = [];
+
+  (route.legs || []).forEach(leg => {
+    if (!leg.geometry || leg.geometry.length < 2) return;
+
+    const isWalk = leg.mode === "WALK";
+    const line = L.polyline(leg.geometry, {
+      color:     isWalk ? "#9ca3af" : "#2563eb",
+      weight:    isWalk ? 3 : 5,
+      opacity:   isWalk ? 0.6 : 0.85,
+      dashArray: isWalk ? "6 8" : null,
+      lineJoin:  "round",
+    }).addTo(map);
+
+    routeLines.push(line);
+    bounds.push(...leg.geometry);
+  });
+
+  // Fit the map to show the full route
+  if (bounds.length > 0) {
+    map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] });
+  }
+}
+
+function clearRouteLines() {
+  routeLines.forEach(l => map.removeLayer(l));
+  routeLines = [];
 }
 
 // ── Alerts ────────────────────────────────────────────────────────────────────
@@ -249,22 +554,25 @@ async function fetchAlerts(routeId) {
     const alerts = await res.json();
     const banner = document.getElementById("alert-banner");
 
-    if (alerts.length === 0) {
+    if (!alerts || alerts.length === 0) {
       banner.classList.add("hidden");
     } else {
-      banner.innerHTML = alerts.map(a => `<strong>⚠ ${a.effect}:</strong> ${a.header}`).join(" &nbsp;·&nbsp; ");
+      banner.innerHTML = alerts
+        .map(a => `<strong>${a.effect}:</strong> ${a.header}`)
+        .join(" &nbsp;·&nbsp; ");
       banner.classList.remove("hidden");
     }
   } catch (e) {
-    console.error("Alerts error:", e);
+    console.error("Alerts fetch error:", e);
   }
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function updateFreshness(freshness) {
-  const badge   = document.getElementById("freshness-badge");
-  const cls     = { LIVE: "badge-live", DELAYED: "badge-delayed", STALE: "badge-stale" };
-  badge.className = `badge ${cls[freshness.level] || ""}`;
+  if (!freshness) return;
+  const badge = document.getElementById("freshness-badge");
+  const cls   = { LIVE: "badge-live", DELAYED: "badge-delayed", STALE: "badge-stale" };
+  badge.className   = `badge ${cls[freshness.level] || "badge-stale"}`;
   badge.textContent = freshness.label;
 }
 

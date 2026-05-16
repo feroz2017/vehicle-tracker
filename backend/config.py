@@ -5,9 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Waltti GTFS-RT ────────────────────────────────────────────────────────────
-# TODO: get key from opendata.waltti.fi
-WALTTI_API_KEY   = os.getenv("WALTTI_API_KEY", "")
-WALTTI_BASE_URL  = os.getenv("WALTTI_BASE_URL", "https://api.waltti.fi/v2/authority/LINKKI")
+# Auth: HTTP Basic Auth — id:secret (not an API key header)
+# Base URL confirmed: https://data.waltti.fi/jyvaskyla/api/gtfsrealtime/v1.0/feed/
+WALTTI_ID      = os.getenv("WALTTI_ID", "")
+WALTTI_SECRET  = os.getenv("WALTTI_SECRET", "")
+WALTTI_BASE_URL = os.getenv("WALTTI_BASE_URL", "https://data.waltti.fi/jyvaskyla/api/gtfsrealtime/v1.0/feed")
 
 # ── Digitransit ───────────────────────────────────────────────────────────────
 # TODO: confirm key and header name with team
