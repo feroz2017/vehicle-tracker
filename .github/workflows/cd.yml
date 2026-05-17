@@ -13,14 +13,5 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Build backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          push: false
-          tags: vehicle-tracker-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: docker build ./backend -t vehicle-tracker-backend:${{ github.sha }}
