@@ -1,7 +1,4 @@
-import logging
 from starlette.requests import HTTPConnection
-
-logger = logging.getLogger(__name__)
 
 
 async def get_redis(request: HTTPConnection):

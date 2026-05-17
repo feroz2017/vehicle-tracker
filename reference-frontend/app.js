@@ -10,8 +10,11 @@ const WS_RETRY_MS = 5000;     // WebSocket reconnect interval
 // ── State ─────────────────────────────────────────────────────────────────────
 let map, markers = {}, selectedRoute = null, ws = null;
 let fromLocation = null, toLocation = null;
-let routeLines = [];      // active Leaflet polylines for the selected route
-let routesData = [];      // full route objects from last /api/plan response
+let routeLines = [];         // active Leaflet polylines for the selected route
+let routesData = [];         // full route objects from last /api/plan response
+let userLocation = null;     // saved GPS fix — restored after clearSearch()
+let userMarker   = null;     // blue "you are here" circle on the map
+let selectedRouteName = null; // short name of the active route, e.g. "S3"
 
 // ── Init map ──────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
@@ -27,7 +30,44 @@ document.addEventListener("DOMContentLoaded", () => {
   // Geocode on input (debounced)
   document.getElementById("input-from").addEventListener("input", () => onInput("from"));
   document.getElementById("input-to").addEventListener("input",   () => onInput("to"));
+
+  // Auto-fill "From" with the user's current position if the browser allows it
+  requestUserLocation();
 });
+
+// ── User geolocation ──────────────────────────────────────────────────────────
+function requestUserLocation() {
+  if (!navigator.geolocation) return;   // browser doesn't support it — silent skip
+
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+
+      userLocation = { name: "My Location", lat, lon, type: "place" };
+      fromLocation = userLocation;
+      document.getElementById("input-from").value = "My Location";
+
+      // Pan to the user and zoom in slightly
+      map.setView([lat, lon], 14);
+
+      // Blue pulsing dot so the user can see where "My Location" is
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.circleMarker([lat, lon], {
+        radius:      9,
+        color:       "#1d4ed8",
+        fillColor:   "#3b82f6",
+        fillOpacity: 0.85,
+        weight:      2,
+      }).bindPopup("You are here").addTo(map);
+    },
+    err => {
+      // Permission denied or timeout — the user can still type an address manually
+      console.info("Geolocation unavailable:", err.message);
+    },
+    { timeout: 10000, maximumAge: 60000 },
+  );
+}
 
 // ── Geocoding (debounced) ─────────────────────────────────────────────────────
 let debounceTimer = null;
@@ -139,10 +179,19 @@ function clearSearch() {
   closeWebSocket();
   clearMarkers();
   clearRouteLines();
-  fromLocation = toLocation = selectedRoute = null;
+  toLocation = selectedRoute = null;
+  selectedRouteName = null;
   routesData = [];
 
-  document.getElementById("input-from").value = "";
+  // Restore the GPS "From" if we have one, otherwise clear the input
+  if (userLocation) {
+    fromLocation = userLocation;
+    document.getElementById("input-from").value = "My Location";
+  } else {
+    fromLocation = null;
+    document.getElementById("input-from").value = "";
+  }
+
   document.getElementById("input-to").value   = "";
   document.getElementById("routes-panel").classList.add("hidden");
   document.getElementById("status-bar").classList.add("hidden");
@@ -202,11 +251,15 @@ function selectRoute(routeId, card) {
   closeWebSocket();
   clearMarkers();
   clearRouteLines();
-  selectedRoute = routeId;
+  selectedRoute     = routeId;
+  selectedRouteName = null;   // will be set below once we find the route object
 
   // Draw the route geometry for this route
   const route = routesData.find(r => r.route_id === routeId);
-  if (route) drawRoute(route);
+  if (route) {
+    selectedRouteName = route.route_name || routeId;
+    drawRoute(route);
+  }
 
   document.getElementById("status-bar").classList.remove("hidden");
   document.getElementById("empty-state").classList.remove("hidden");
@@ -375,15 +428,14 @@ function _tickVehicle(vid, ts) {
 
   // Update icon bearing from road direction (only if colour bucket unchanged)
   const roadBearing = _bearing(a, b);
-  const icon = buildBusIcon(roadBearing, s.delaySeconds);
   const prev = s.marker.options._delayBucket;
-  const next = _delayBucket(s.delaySeconds);
+  const next = _delayBucket(s.delaySeconds, s.isDelayRealtime);
   if (prev !== next) {
-    s.marker.setIcon(icon);
+    s.marker.setIcon(buildBusIcon(roadBearing, s.delaySeconds, s.isDelayRealtime, s.routeName));
     s.marker.options._delayBucket = next;
   } else if (Math.abs(roadBearing - (s.lastBearing || 0)) > 5) {
     // Bearing changed enough to be visible — rebuild icon
-    s.marker.setIcon(buildBusIcon(roadBearing, s.delaySeconds));
+    s.marker.setIcon(buildBusIcon(roadBearing, s.delaySeconds, s.isDelayRealtime, s.routeName));
     s.lastBearing = roadBearing;
   }
 
@@ -404,9 +456,9 @@ async function updateMarkers(vehicles) {
 
     // ── create marker if new ──────────────────────────────────────────────
     if (!markers[v.id]) {
-      const icon   = buildBusIcon(v.bearing, v.delay_seconds);
+      const icon   = buildBusIcon(v.bearing, v.delay_seconds, v.is_delay_realtime, selectedRouteName);
       const marker = L.marker([v.lat, v.lon], { icon }).bindPopup(popup).addTo(map);
-      marker.options._delayBucket = _delayBucket(v.delay_seconds);
+      marker.options._delayBucket = _delayBucket(v.delay_seconds, v.is_delay_realtime);
       markers[v.id] = marker;
     } else {
       markers[v.id].setPopupContent(popup);
@@ -431,12 +483,14 @@ async function updateMarkers(vehicles) {
         animState[v.id] = {
           marker,
           path,
-          segIdx:       0,
-          travelled:    0,
-          mPerMs:       speedMps / 1000,
-          lastTs:       performance.now(),
-          delaySeconds: v.delay_seconds || 0,
-          lastBearing:  v.bearing || 0,
+          segIdx:           0,
+          travelled:        0,
+          mPerMs:           speedMps / 1000,
+          lastTs:           performance.now(),
+          delaySeconds:     v.delay_seconds || 0,
+          isDelayRealtime:  v.is_delay_realtime || false,
+          lastBearing:      v.bearing || 0,
+          routeName:        selectedRouteName,
         };
         animState[v.id].rafId = requestAnimationFrame(ts => _tickVehicle(v.id, ts));
         continue;   // skip plain setLatLng below
@@ -446,9 +500,9 @@ async function updateMarkers(vehicles) {
     // ── fallback: plain marker placement (no shape available yet) ─────────
     marker.setLatLng([v.lat, v.lon]);
     const prev = marker.options._delayBucket;
-    const next = _delayBucket(v.delay_seconds);
+    const next = _delayBucket(v.delay_seconds, v.is_delay_realtime);
     if (prev !== next) {
-      marker.setIcon(buildBusIcon(v.bearing, v.delay_seconds));
+      marker.setIcon(buildBusIcon(v.bearing, v.delay_seconds, v.is_delay_realtime, selectedRouteName));
       marker.options._delayBucket = next;
     }
   }
@@ -464,29 +518,37 @@ async function updateMarkers(vehicles) {
   });
 }
 
-// Returns 0 / 1 / 2 — used to detect delay colour changes without icon rebuild
-function _delayBucket(delaySeconds) {
+// Returns 0 / 1 / 2 / 3 — used to detect colour changes without icon rebuild
+// 0=on-time(green)  1=slightly-late(amber)  2=very-late(red)  3=unknown(grey)
+function _delayBucket(delaySeconds, isDelayRealtime) {
+  if (!isDelayRealtime) return 3;
   const d = delaySeconds || 0;
   return d > 180 ? 2 : d > 60 ? 1 : 0;
 }
 
-function buildBusIcon(bearing, delaySeconds) {
+function buildBusIcon(bearing, delaySeconds, isDelayRealtime, routeName) {
   const delay = delaySeconds || 0;
-  const color = delay > 180 ? "#ef4444"
-              : delay > 60  ? "#f59e0b"
-              : "#22c55e";
+  const color = !isDelayRealtime ? "#9ca3af"   // grey  — no delay data
+              : delay > 180      ? "#ef4444"   // red   — very late
+              : delay > 60       ? "#f59e0b"   // amber — slightly late
+              :                    "#22c55e";  // green — on time
+
+  // Show the route short name (e.g. "S3") instead of a directional arrow.
+  // Rotation is intentionally omitted: spinning text is illegible on the map.
+  const label    = routeName || "?";
+  const fontSize = label.length > 3 ? "9px" : "11px";  // shrink for long names
 
   return L.divIcon({
     className: "",
     html: `<div style="
-      width:28px;height:28px;border-radius:50%;
+      width:32px;height:32px;border-radius:50%;
       background:${color};border:2px solid white;
       display:flex;align-items:center;justify-content:center;
-      color:white;font-size:13px;font-weight:700;
-      transform:rotate(${bearing || 0}deg);
-      box-shadow:0 2px 6px rgba(0,0,0,.3);">▲</div>`,
-    iconSize:   [28, 28],
-    iconAnchor: [14, 14],
+      color:white;font-size:${fontSize};font-weight:700;
+      box-shadow:0 2px 6px rgba(0,0,0,.3);
+      letter-spacing:-0.5px;">${label}</div>`,
+    iconSize:   [32, 32],
+    iconAnchor: [16, 16],
   });
 }
 

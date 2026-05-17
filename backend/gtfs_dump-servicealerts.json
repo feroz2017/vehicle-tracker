@@ -1,0 +1,150 @@
+{
+  "header": {
+    "gtfs_realtime_version": "2.0",
+    "incrementality": "FULL_DATASET",
+    "timestamp": "1779014979"
+  },
+  "entity": [
+    {
+      "id": "186",
+      "is_deleted": false,
+      "alert": {
+        "active_period": [
+          {
+            "start": "1776114000",
+            "end": "1798754340"
+          }
+        ],
+        "informed_entity": [
+          {
+            "stop_id": "207445"
+          }
+        ],
+        "cause": "CONSTRUCTION",
+        "effect": "STOP_MOVED",
+        "url": {
+          "translation": [
+            {
+              "text": "",
+              "language": "fi"
+            }
+          ]
+        },
+        "header_text": {
+          "translation": [
+            {
+              "text": "Pysäkki Jäähalli 1 pois käytöstä arviolta 31.12.2026 saakka",
+              "language": "fi"
+            }
+          ]
+        },
+        "description_text": {
+          "translation": [
+            {
+              "text": "Pysäkki Jäähalli 1 pois käytöstä arviolta 31.12.2026 saakka.",
+              "language": "fi"
+            }
+          ]
+        },
+        "severity_level": "WARNING"
+      }
+    },
+    {
+      "id": "187",
+      "is_deleted": false,
+      "alert": {
+        "active_period": [
+          {
+            "start": "1777842000",
+            "end": "1811710740"
+          }
+        ],
+        "informed_entity": [
+          {
+            "stop_id": "93098"
+          },
+          {
+            "stop_id": "93099"
+          },
+          {
+            "stop_id": "93100"
+          },
+          {
+            "stop_id": "93101"
+          }
+        ],
+        "cause": "CONSTRUCTION",
+        "effect": "NO_SERVICE",
+        "url": {
+          "translation": [
+            {
+              "text": "",
+              "language": "fi"
+            }
+          ]
+        },
+        "header_text": {
+          "translation": [
+            {
+              "text": "Pysäkki pois käytöstä",
+              "language": "fi"
+            }
+          ]
+        },
+        "description_text": {
+          "translation": [
+            {
+              "text": "Pysäkki pois käytöstä 6.5.2026- Kesä 2027",
+              "language": "fi"
+            }
+          ]
+        },
+        "severity_level": "WARNING"
+      }
+    },
+    {
+      "id": "190",
+      "is_deleted": false,
+      "alert": {
+        "active_period": [
+          {
+            "start": "1778187600",
+            "end": "1779137940"
+          }
+        ],
+        "informed_entity": [
+          {
+            "stop_id": "207691"
+          }
+        ],
+        "cause": "CONSTRUCTION",
+        "effect": "MODIFIED_SERVICE",
+        "url": {
+          "translation": [
+            {
+              "text": "",
+              "language": "fi"
+            }
+          ]
+        },
+        "header_text": {
+          "translation": [
+            {
+              "text": "Pysäkki Satama 2 pois käytöstä 11.5-18.2026 välisen ajan",
+              "language": "fi"
+            }
+          ]
+        },
+        "description_text": {
+          "translation": [
+            {
+              "text": "Pysäkki Satama 2 pois käytöstä 11.5-18.2026 välisen ajan työmaan vuoksi.",
+              "language": "fi"
+            }
+          ]
+        },
+        "severity_level": "WARNING"
+      }
+    }
+  ]
+}

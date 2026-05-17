@@ -5,7 +5,7 @@ Run:  cd backend && pytest tests/test_vehicle_service.py -v
 """
 import time
 import pytest
-from processing.models import Vehicle, TripDelay, FreshnessLevel
+from processing.models import Vehicle, TripUpdate, FreshnessLevel
 from processing import vehicle_service
 
 
@@ -48,29 +48,40 @@ def test_get_all_route_ids_empty():
     assert vehicle_service.get_all_route_ids([]) == []
 
 
-# ── enrich_with_delays ────────────────────────────────────────────────────────
+# ── enrich_with_updates ───────────────────────────────────────────────────────
 
-def test_enrich_adds_delay_when_trip_matches():
+def make_trip_update(trip_id="trip-1") -> TripUpdate:
+    return TripUpdate(
+        trip_id=trip_id,
+        next_stop_id="207579",
+        next_stop_arrival=1779014074,
+        terminus_arrival=1779015364,
+        stops_remaining=16,
+    )
+
+
+def test_enrich_adds_next_stop_when_trip_matches():
     vehicle = make_vehicle(trip_id="trip-1")
-    delays  = [TripDelay(trip_id="trip-1", delay_seconds=120, is_realtime=True)]
-    result  = vehicle_service.enrich_with_delays([vehicle], delays)
-    assert result[0].delay_seconds     == 120
-    assert result[0].is_delay_realtime is True
+    result  = vehicle_service.enrich_with_updates([vehicle], [make_trip_update()])
+    assert result[0].next_stop_id      == "207579"
+    assert result[0].next_stop_arrival == 1779014074
+    assert result[0].terminus_arrival  == 1779015364
+    assert result[0].stops_remaining   == 16
 
 
-def test_enrich_no_update_leaves_zero_delay():
+def test_enrich_no_update_leaves_nones():
     vehicle = make_vehicle(trip_id="trip-1")
-    result  = vehicle_service.enrich_with_delays([vehicle], [])
-    assert result[0].delay_seconds     == 0
-    assert result[0].is_delay_realtime is False
+    result  = vehicle_service.enrich_with_updates([vehicle], [])
+    assert result[0].next_stop_id      is None
+    assert result[0].next_stop_arrival is None
+    assert result[0].stops_remaining   is None
 
 
 def test_enrich_vehicle_without_trip_id():
     vehicle = make_vehicle()
     vehicle.trip_id = None
-    delays  = [TripDelay(trip_id="trip-1", delay_seconds=60, is_realtime=True)]
-    result  = vehicle_service.enrich_with_delays([vehicle], delays)
-    assert result[0].delay_seconds == 0
+    result  = vehicle_service.enrich_with_updates([vehicle], [make_trip_update()])
+    assert result[0].next_stop_id is None
 
 
 # ── compute_freshness ─────────────────────────────────────────────────────────

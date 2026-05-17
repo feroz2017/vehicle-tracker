@@ -62,13 +62,17 @@ def parse_vehicle_positions(raw_bytes: bytes) -> list[dict]:
 
 def parse_trip_updates(raw_bytes: bytes) -> list[dict]:
     """
-    Decode TripUpdates protobuf feed → list of trip delay dicts.
+    Decode TripUpdates protobuf feed → list of trip update dicts.
 
     Each dict contains:
-        trip_id, delay_seconds, is_realtime
+        trip_id, next_stop_id, next_stop_arrival, stops_remaining, terminus_arrival
 
-    delay_seconds is taken from the first stop_time_update that has a departure delay.
-    Falls back to arrival delay if departure is not present.
+    Waltti sends absolute Unix timestamps only (arrival.time / departure.time).
+    The `delay` field is not supported and never present — confirmed in Waltti docs.
+    Delay computation requires the static GTFS schedule (see TODO.md item 4).
+
+    The first entry in stop_time_update is always the next stop ahead of the bus
+    (Waltti omits stops the bus has already passed).
     """
     if not raw_bytes:
         return []
@@ -76,7 +80,7 @@ def parse_trip_updates(raw_bytes: bytes) -> list[dict]:
     feed = gtfs_realtime_pb2.FeedMessage()
     feed.ParseFromString(raw_bytes)
 
-    delays = []
+    updates = []
     for entity in feed.entity:
         if not entity.HasField("trip_update"):
             continue
@@ -86,29 +90,37 @@ def parse_trip_updates(raw_bytes: bytes) -> list[dict]:
         if not trip_id:
             continue
 
-        delay = 0
-        for stu in tu.stop_time_update:
-            if stu.HasField("departure") and stu.departure.HasField("delay"):
-                delay = stu.departure.delay
-                break
-            elif stu.HasField("arrival") and stu.arrival.HasField("delay"):
-                delay = stu.arrival.delay
-                break
+        stops = tu.stop_time_update
+        if not stops:
+            continue
 
-        delays.append({"trip_id": trip_id, "delay_seconds": delay, "is_realtime": True})
+        next_stop        = stops[0]
+        last_stop        = stops[-1]
 
-    return delays
+        next_stop_id      = next_stop.stop_id or None
+        next_stop_arrival = next_stop.arrival.time  if next_stop.HasField("arrival")  else None
+        terminus_arrival  = last_stop.arrival.time  if last_stop.HasField("arrival")  else None
+        stops_remaining   = len(stops)
+
+        updates.append({
+            "trip_id":           trip_id,
+            "next_stop_id":      next_stop_id,
+            "next_stop_arrival": next_stop_arrival,
+            "terminus_arrival":  terminus_arrival,
+            "stops_remaining":   stops_remaining,
+        })
+
+    return updates
 
 
 def parse_alerts(raw_bytes: bytes) -> list[dict]:
     """
     Decode Alerts protobuf feed → list of alert dicts.
 
-    NOTE: Waltti/LINKKI does not currently publish a GTFS-RT alerts feed.
-    This function is implemented but will always receive empty bytes from
-    waltti_client.fetch_alerts(), so it will always return [].
-
-    If Waltti adds an alerts feed in future, this code is ready.
+    LINKKI alerts use stop_id (not route_id) in informed_entity, so route_ids
+    will typically be empty. stop_ids is captured separately so the frontend
+    can display location context. Alerts with no route_ids are treated as
+    network-wide by cache_writer and returned for every route query.
     """
     if not raw_bytes:
         return []
@@ -122,22 +134,20 @@ def parse_alerts(raw_bytes: bytes) -> list[dict]:
             continue
         a = entity.alert
 
-        route_ids = [
-            informed.route_id
-            for informed in a.informed_entity
-            if informed.route_id
-        ]
+        route_ids = [ie.route_id for ie in a.informed_entity if ie.route_id]
+        stop_ids  = [ie.stop_id  for ie in a.informed_entity if ie.stop_id]
 
-        header = a.header_text.translation[0].text if a.header_text.translation else ""
+        header      = a.header_text.translation[0].text      if a.header_text.translation      else ""
         description = a.description_text.translation[0].text if a.description_text.translation else ""
 
         alerts.append({
             "id":          entity.id,
             "header":      header,
             "description": description,
-            "effect":      a.effect.name if a.effect else "UNKNOWN_EFFECT",
-            "cause":       a.cause.name  if a.cause  else "UNKNOWN_CAUSE",
+            "effect":      gtfs_realtime_pb2.Alert.Effect.Name(a.effect) if a.effect else "UNKNOWN_EFFECT",
+            "cause":       gtfs_realtime_pb2.Alert.Cause.Name(a.cause)   if a.cause  else "UNKNOWN_CAUSE",
             "route_ids":   route_ids,
+            "stop_ids":    stop_ids,
         })
 
     return alerts

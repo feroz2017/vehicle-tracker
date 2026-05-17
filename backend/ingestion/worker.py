@@ -15,7 +15,7 @@ from config import REDIS_URL, WORKER_INTERVAL
 from ingestion.waltti_client import fetch_vehicle_positions, fetch_trip_updates, fetch_alerts
 from ingestion.gtfs_parser   import parse_vehicle_positions, parse_trip_updates, parse_alerts
 from ingestion.cache_writer  import write_vehicles, write_alerts
-from processing.models       import Vehicle, TripDelay
+from processing.models       import Vehicle, TripUpdate
 from processing              import vehicle_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [worker] %(message)s")
@@ -43,19 +43,21 @@ def _raw_to_vehicles(raw: list[dict]) -> list[Vehicle]:
     return vehicles
 
 
-def _raw_to_delays(raw: list[dict]) -> list[TripDelay]:
-    """Convert raw dicts from gtfs_parser into TripDelay domain objects."""
-    delays = []
+def _raw_to_updates(raw: list[dict]) -> list[TripUpdate]:
+    """Convert raw dicts from gtfs_parser into TripUpdate domain objects."""
+    updates = []
     for d in raw:
         trip_id = d.get("trip_id")
         if not trip_id:
             continue
-        delays.append(TripDelay(
+        updates.append(TripUpdate(
             trip_id=trip_id,
-            delay_seconds=d.get("delay_seconds", 0),
-            is_realtime=d.get("is_realtime", True),
+            next_stop_id=d.get("next_stop_id"),
+            next_stop_arrival=d.get("next_stop_arrival"),
+            terminus_arrival=d.get("terminus_arrival"),
+            stops_remaining=d.get("stops_remaining", 0),
         ))
-    return delays
+    return updates
 
 
 async def run_cycle(redis) -> None:
@@ -90,7 +92,7 @@ async def run_cycle(redis) -> None:
     alerts_bytes    = alerts_bytes    if isinstance(alerts_bytes,    bytes) else b""
 
     # ── 2. Parse ──────────────────────────────────────────────────────────────
-    raw_vehicles, raw_delays, raw_alerts = [], [], []
+    raw_vehicles, raw_trip_updates, raw_alerts = [], [], []
 
     try:
         raw_vehicles = parse_vehicle_positions(positions_bytes)
@@ -99,8 +101,8 @@ async def run_cycle(redis) -> None:
         logger.error("Failed to parse vehicle positions: %s", exc)
 
     try:
-        raw_delays = parse_trip_updates(updates_bytes)
-        logger.info("Parsed %d trip delays", len(raw_delays))
+        raw_trip_updates = parse_trip_updates(updates_bytes)
+        logger.info("Parsed %d trip updates", len(raw_trip_updates))
     except Exception as exc:
         logger.error("Failed to parse trip updates: %s", exc)
 
@@ -112,9 +114,9 @@ async def run_cycle(redis) -> None:
 
     # ── 3. Convert + enrich ───────────────────────────────────────────────────
     vehicles = _raw_to_vehicles(raw_vehicles)
-    delays   = _raw_to_delays(raw_delays)
-    enriched = vehicle_service.enrich_with_delays(vehicles, delays)
-    logger.info("Enriched %d vehicles with delay data", len(enriched))
+    updates  = _raw_to_updates(raw_trip_updates)
+    enriched = vehicle_service.enrich_with_updates(vehicles, updates)
+    logger.info("Enriched %d vehicles with trip update data", len(enriched))
 
     # ── 4. Write to Redis ─────────────────────────────────────────────────────
     try:

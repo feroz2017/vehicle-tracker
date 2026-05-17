@@ -35,13 +35,10 @@ def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> Plan
     """
     Convert Digitransit route planning GraphQL response into a PlanResult.
 
-    TODO: implement once Digitransit API key is confirmed.
-    Digitransit returns itineraries from:
-        POST https://api.digitransit.fi/routing/v2/routers/finland/index/graphql
-
-    GraphQL query returns itineraries → each has legs → each leg has:
-        mode, route { shortName }, from { name }, to { name },
-        startTime (ms epoch), endTime (ms epoch), duration, distance
+    Endpoint: POST /routing/v2/waltti/gtfs/v1
+    Each itinerary has legs with: mode, route { gtfsId shortName },
+    from/to { name }, startTime/endTime (ms epoch), duration, distance,
+    and legGeometry { points } (Google encoded polyline — decoded here).
     """
     routes: list[Route] = []
 
@@ -52,8 +49,7 @@ def parse_plan_response(raw: dict, from_loc: Location, to_loc: Location) -> Plan
         legs: list[RouteLeg] = []
 
         for leg in legs_raw:
-            # TODO: null-check every field — Digitransit can omit route info for walk legs
-            route_info = leg.get("route") or {}
+            route_info = leg.get("route") or {}  # walk legs have no route field
             start_ms = leg.get("startTime", 0)
             end_ms   = leg.get("endTime", 0)
 

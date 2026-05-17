@@ -5,13 +5,9 @@ def parse_geocoding_response(raw: dict) -> list[Location]:
     """
     Convert Digitransit geocoding API response into Location objects.
 
-    TODO: implement once Digitransit API key is confirmed.
-    Digitransit returns GeoJSON FeatureCollection from:
-        GET /geocoding/v1/search?text={query}&lang=en
-
-    Each feature has:
-        properties.name, properties.label, properties.layer (venue|stop|address)
-        geometry.coordinates → [lon, lat]  ← note: lon first in GeoJSON
+    Digitransit returns a GeoJSON FeatureCollection. Each feature has:
+        properties.label, properties.layer (venue|stop|address)
+        geometry.coordinates → [lon, lat]  ← note: GeoJSON is lon-first
     """
     locations: list[Location] = []
 
@@ -20,7 +16,6 @@ def parse_geocoding_response(raw: dict) -> list[Location]:
         props = feature.get("properties", {})
         coords = feature.get("geometry", {}).get("coordinates", [None, None])
 
-        # TODO: add null checks for each field — coordinates can be missing
         if not coords or coords[0] is None or coords[1] is None:
             continue
 

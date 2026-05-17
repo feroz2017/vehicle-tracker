@@ -1,51 +1,20 @@
 import asyncio
 import json
 import logging
-import random
 import time
-from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.dependencies import get_redis
-from processing import vehicle_service, geocoder, route_planner, alert_filter
-from processing.models import (
-    Location, Vehicle, ServiceAlert, Route, RouteLeg,
-    PlanResult, FreshnessLevel, FreshnessStatus,
-)
+from config import PLAN_CACHE_TTL, GEO_CACHE_TTL
+from processing import vehicle_service, geocoder, route_planner
+from processing.models import Location
 from ingestion import digitransit_client, cache_writer
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DUMMY DATA — used as fallback when Redis is unavailable or route has no data
-# ══════════════════════════════════════════════════════════════════════════════
-
-DUMMY_VEHICLES_BASE = {
-    "4": [
-        Vehicle("v-001", "601", "4", 62.2416, 25.7209, 45.0,  32.5, "trip-001", 120, True,  "Keskusta",  "Yliopisto"),
-        Vehicle("v-002", "602", "4", 62.2380, 25.7150, 90.0,  28.0, "trip-002",   0, True,  "Asemakatu", "Keskusta"),
-        Vehicle("v-003", "603", "4", 62.2450, 25.7300, 180.0, 0.0,  "trip-003",  60, True,  "Yliopisto", "Mattilanniemi"),
-    ],
-    "9": [
-        Vehicle("v-010", "901", "9", 62.2450, 25.7250, 270.0, 45.0, "trip-010", 0,   True, "Keljo",    "Keskusta"),
-        Vehicle("v-011", "902", "9", 62.2380, 25.7400, 0.0,   38.0, "trip-011", 180, True, "Keskusta", "Keljo"),
-    ],
-}
-
-
-def _jitter(base: float, amount: float = 0.0005) -> float:
-    return base + random.uniform(-amount, amount)
-
-
-def _vehicle_to_dict(v: Vehicle) -> dict:
-    d = asdict(v)
-    d["delay_label"] = v.delay_label
-    return d
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -86,7 +55,7 @@ async def geocode_endpoint(
             for l in locations
         ]
         if redis:
-            await cache_writer.write_geocode(redis, cache_key, result, ttl=86400)
+            await cache_writer.write_geocode(redis, cache_key, result, ttl=GEO_CACHE_TTL)
         return result
     except Exception as exc:
         logger.error("Geocoding failed: %s", exc)
@@ -168,7 +137,7 @@ async def plan(body: PlanRequest, redis = Depends(get_redis)):
         }
 
         if redis:
-            await cache_writer.write_plan(redis, cache_key, payload, ttl=300)
+            await cache_writer.write_plan(redis, cache_key, payload, ttl=PLAN_CACHE_TTL)
 
         return payload
 
@@ -184,10 +153,27 @@ async def plan(body: PlanRequest, redis = Depends(get_redis)):
 async def get_alerts(route_id: str, redis = Depends(get_redis)):
     """
     Return active service alerts for a given route.
-    LINKKI does not publish a GTFS-RT alerts feed — always returns [].
-    Kept in place so the frontend banner works if alerts are added in future.
+
+    Merges two Redis keys:
+      alerts:{route_id}  — alerts that explicitly name this route
+      alerts:ALL         — network-wide/stop-based alerts with no route_id
+
+    LINKKI alerts are currently stop-based (informed_entity uses stop_id),
+    so they land in alerts:ALL and are returned for every route.
     """
-    return []
+    if not redis:
+        return []
+
+    results = []
+    try:
+        for key in (f"alerts:{route_id}", "alerts:ALL"):
+            raw = await redis.get(key)
+            if raw:
+                results.extend(json.loads(raw))
+    except Exception as exc:
+        logger.warning("Redis read failed for alerts: %s", exc)
+
+    return results
 
 
 @router.get("/api/shape/{trip_id:path}")
@@ -214,7 +200,7 @@ async def get_shape(trip_id: str, redis = Depends(get_redis)):
     try:
         points = await digitransit_client.fetch_trip_shape(trip_id)
         if redis and points:
-            await redis.set(cache_key, json.dumps(points), ex=86400)
+            await redis.set(cache_key, json.dumps(points), ex=GEO_CACHE_TTL)
         return {"points": points}
     except Exception as exc:
         logger.error("Shape fetch failed for %s: %s", trip_id, exc)
@@ -232,8 +218,7 @@ async def get_routes(redis = Depends(get_redis)):
         except Exception as exc:
             logger.warning("Redis read failed for route_ids: %s", exc)
 
-    # Fallback: return dummy route IDs if Redis has nothing yet
-    return {"routes": sorted(DUMMY_VEHICLES_BASE.keys())}
+    return {"routes": []}
 
 
 @router.websocket("/ws/vehicles/{route_id}")
@@ -245,24 +230,18 @@ async def vehicle_stream(
     """
     WebSocket endpoint — streams live vehicle positions to the client.
 
-    Real flow (Redis available):
+    Flow:
       1. Accept connection
       2. Send current vehicles:{route_id} from Redis immediately
       3. Subscribe to Redis Pub/Sub "vehicles:updated"
       4. On each event: read fresh data + compute freshness → send
       5. On disconnect: unsubscribe cleanly
-
-    Dummy fallback (Redis unavailable):
-      Sends jittered dummy positions every 5s so the UI stays testable.
     """
     await websocket.accept()
     logger.info("WebSocket opened: route=%s", route_id)
 
     try:
-        if redis:
-            await _real_stream(websocket, route_id, redis)
-        else:
-            await _dummy_stream(websocket, route_id)
+        await _real_stream(websocket, route_id, redis)
     except WebSocketDisconnect:
         logger.info("WebSocket closed: route=%s", route_id)
     except Exception as exc:
@@ -329,27 +308,3 @@ async def _real_stream(websocket: WebSocket, route_id: str, redis) -> None:
         await pubsub.aclose()
 
 
-async def _dummy_stream(websocket: WebSocket, route_id: str) -> None:
-    """Fallback: stream jittered dummy positions every 5s when Redis is down."""
-    base_vehicles = DUMMY_VEHICLES_BASE.get(route_id, [])
-    tick = 0
-
-    while True:
-        freshness = vehicle_service.compute_freshness(time.time() - tick)
-        moved = [
-            {**_vehicle_to_dict(v), "lat": _jitter(v.lat), "lon": _jitter(v.lon)}
-            for v in base_vehicles
-        ]
-        await websocket.send_text(json.dumps({
-            "route_id":      route_id,
-            "vehicle_count": len(moved),
-            "vehicles":      moved,
-            "alerts":        [],
-            "freshness": {
-                "level":       freshness.level.value,
-                "label":       freshness.label,
-                "age_seconds": freshness.age_seconds,
-            },
-        }))
-        tick += 5
-        await asyncio.sleep(5)

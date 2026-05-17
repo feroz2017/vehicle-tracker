@@ -3,10 +3,6 @@ from config import DIGITRANSIT_API_KEY, DIGITRANSIT_BASE_URL
 
 
 def _headers() -> dict:
-    """
-    TODO: confirm header name with team.
-    Digitransit typically uses 'digitransit-subscription-key'.
-    """
     if not DIGITRANSIT_API_KEY:
         return {}
     return {"digitransit-subscription-key": DIGITRANSIT_API_KEY}
@@ -18,9 +14,7 @@ async def geocode(query: str) -> dict:
 
     Endpoint: GET /geocoding/v1/search
     Returns raw GeoJSON FeatureCollection — parsed by processing/geocoder.py
-
-    TODO: add &focus.point.lat=62.24&focus.point.lon=25.72 to bias results
-          towards Jyväskylä when API key is available.
+    Results are biased toward Jyväskylä city centre via focus.point params.
     """
     url = f"{DIGITRANSIT_BASE_URL}/geocoding/v1/search"
     params = {

@@ -1,6 +1,6 @@
 import time
 from config import DELAYED_THRESHOLD, STALE_THRESHOLD
-from processing.models import Vehicle, TripDelay, FreshnessStatus, FreshnessLevel
+from processing.models import Vehicle, TripUpdate, FreshnessStatus, FreshnessLevel
 
 
 def filter_by_route(vehicles: list[Vehicle], route_id: str) -> list[Vehicle]:
@@ -13,25 +13,26 @@ def get_all_route_ids(vehicles: list[Vehicle]) -> list[str]:
     return sorted({v.route_id for v in vehicles if v.route_id})
 
 
-def enrich_with_delays(
+def enrich_with_updates(
     vehicles: list[Vehicle],
-    trip_delays: list[TripDelay],
+    trip_updates: list[TripUpdate],
 ) -> list[Vehicle]:
     """
     Cross-reference vehicle list with TripUpdates feed.
-    Adds delay_seconds and is_delay_realtime to each vehicle.
+    Adds next stop, terminus arrival and stops remaining to each vehicle.
 
-    If no TripUpdate exists for a vehicle, delay stays 0 and is_delay_realtime = False.
+    Waltti does not send delay fields — delay_seconds and is_delay_realtime
+    are left at their defaults (0 / False) until static GTFS is implemented.
     """
-    # Build lookup: trip_id → TripDelay
-    delay_map: dict[str, TripDelay] = {d.trip_id: d for d in trip_delays}
+    update_map: dict[str, TripUpdate] = {u.trip_id: u for u in trip_updates}
 
     for vehicle in vehicles:
-        if vehicle.trip_id and vehicle.trip_id in delay_map:
-            td = delay_map[vehicle.trip_id]
-            vehicle.delay_seconds     = td.delay_seconds
-            vehicle.is_delay_realtime = td.is_realtime
-        # else: no update found — leave delay_seconds=0, is_delay_realtime=False
+        if vehicle.trip_id and vehicle.trip_id in update_map:
+            tu = update_map[vehicle.trip_id]
+            vehicle.next_stop_id      = tu.next_stop_id
+            vehicle.next_stop_arrival = tu.next_stop_arrival
+            vehicle.terminus_arrival  = tu.terminus_arrival
+            vehicle.stops_remaining   = tu.stops_remaining
 
     return vehicles
 

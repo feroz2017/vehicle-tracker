@@ -53,20 +53,17 @@ async def fetch_trip_updates() -> bytes:
 async def fetch_alerts() -> bytes:
     """
     Fetch service alerts from Waltti GTFS-RT feed.
+    Returns raw protobuf bytes — decoded by gtfs_parser.py.
 
-    NOTE: The Waltti /alert endpoint returns 404 for LINKKI (Jyväskylä).
-    LINKKI does not currently publish a GTFS-RT alerts feed.
-    This function returns empty bytes — the app falls back to no alerts shown.
-
-    If Waltti adds an alert feed in future, uncomment the real fetch below.
+    Confirmed URL: {WALTTI_BASE_URL}/servicealert
+    Auth: HTTP Basic (WALTTI_ID:WALTTI_SECRET)
     """
-    return b""
+    auth = _auth()
+    if not auth:
+        return b""
 
-    # auth = _auth()
-    # if not auth:
-    #     return b""
-    # url = f"{WALTTI_BASE_URL}/alert"
-    # async with httpx.AsyncClient(timeout=10) as client:
-    #     response = await client.get(url, auth=auth)
-    #     response.raise_for_status()
-    #     return response.content
+    url = f"{WALTTI_BASE_URL}/servicealert"
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(url, auth=auth)
+        response.raise_for_status()
+        return response.content

@@ -41,10 +41,14 @@ class Vehicle:
     bearing:            Optional[float]  # degrees 0–360, None if not reported
     speed_kmh:          Optional[float]  # None if not reported
     trip_id:            Optional[str]
-    delay_seconds:      int  = 0         # enriched from TripUpdates feed
-    is_delay_realtime:  bool = False     # False = no TripUpdate found for this vehicle
-    current_stop:       Optional[str] = None
-    next_stop:          Optional[str] = None
+    # Delay fields — always default values until static GTFS is implemented (see TODO.md item 4)
+    delay_seconds:      int  = 0
+    is_delay_realtime:  bool = False
+    # Enriched from TripUpdates feed
+    next_stop_id:       Optional[str] = None   # stop_id of the next stop ahead
+    next_stop_arrival:  Optional[int] = None   # predicted Unix timestamp
+    terminus_arrival:   Optional[int] = None   # predicted Unix timestamp of last stop
+    stops_remaining:    Optional[int] = None   # how many stops left including next
     timestamp:          Optional[int] = None   # Unix time of GPS reading
 
     @property
@@ -57,13 +61,17 @@ class Vehicle:
         return f"{mins} min late" if self.delay_seconds > 0 else f"{mins} min early"
 
 
-# ── Trip delays (from Waltti GTFS-RT TripUpdates feed) ───────────────────────
+# ── Trip updates (from Waltti GTFS-RT TripUpdates feed) ──────────────────────
+# Waltti sends absolute predicted times only — no delay offset fields.
+# Delay computation requires static GTFS schedule (see TODO.md item 4).
 
 @dataclass
-class TripDelay:
-    trip_id:        str
-    delay_seconds:  int
-    is_realtime:    bool
+class TripUpdate:
+    trip_id:           str
+    next_stop_id:      Optional[str]
+    next_stop_arrival: Optional[int]   # Unix timestamp
+    terminus_arrival:  Optional[int]   # Unix timestamp
+    stops_remaining:   int
 
 
 # ── Service alerts (from Waltti GTFS-RT Alerts feed) ─────────────────────────
