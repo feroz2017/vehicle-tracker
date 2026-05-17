@@ -1,0 +1,13 @@
+@import 'tailwindcss';
+@import '@mdi/font/css/materialdesignicons.css';
+
+:root {
+  --background: white;
+  --foreground: oklch(14.5% 0.008 326);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}

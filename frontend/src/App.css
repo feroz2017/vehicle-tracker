@@ -1,0 +1,15 @@
+.start-marker {
+  filter: hue-rotate(-10deg);
+}
+
+.end-marker {
+  filter: hue-rotate(150deg);
+}
+
+.vehicle-marker {
+  filter: hue-rotate(250deg);
+}
+
+div.divider {
+  border-top: 1px solid var(--color-slate-500);
+}

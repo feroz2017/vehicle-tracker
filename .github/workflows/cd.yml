@@ -15,3 +15,7 @@ jobs:
 
       - name: Build backend image
         run: docker build ./backend -t vehicle-tracker-backend:${{ github.sha }}
+
+      - name: Build frontend image
+        run: docker build ./frontend -t vehicle-tracker-backend:${{ github.sha }}
+

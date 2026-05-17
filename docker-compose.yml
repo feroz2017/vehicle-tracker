@@ -1,6 +1,19 @@
 version: "3.9"
 
 services:
+  # ── Frontend ─────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - 5173:80 # expose locally for debugging; remove in prod
+    environment:
+      - VITE_API_URL=http://fastapi:8000
+      - VITE_WS_URL=ws://fastapi:8000
+
+
   # ── Redis ─────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
