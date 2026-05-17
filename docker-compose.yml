@@ -44,3 +44,20 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  # ── GTFS loader (static schedule — refreshes nightly) ────────────────────────
+  # Loads schedule on startup, then APScheduler fires again every night at
+  # 01:30 EET (30 min after Waltti publishes the new ZIP at 01:00 EET).
+  # timezone="Europe/Helsinki" handles DST automatically.
+  gtfs-loader:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "ingestion.gtfs_loader"]
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy

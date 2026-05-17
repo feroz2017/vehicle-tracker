@@ -34,5 +34,11 @@ htmlcov/
 # Docker
 *.log
 
+# GTFS dump files
+gtfs_dump*.json
+gtfs_dump-*.json
+
 
 docs
+
+TODO.md

@@ -3,9 +3,10 @@
    This file will be replaced by the frontend team.
    ════════════════════════════════════════════════════════════════════════════ */
 
-const API_BASE    = "";       // same origin — FastAPI serves this file
-const DEBOUNCE_MS = 400;      // geocode debounce delay
-const WS_RETRY_MS = 5000;     // WebSocket reconnect interval
+const API_BASE         = "";    // same origin — FastAPI serves this file
+const DEBOUNCE_MS      = 400;   // geocode debounce delay
+const WS_RETRY_MS      = 5000;  // WebSocket reconnect interval
+const ANIM_SPEED_SCALE = 0.2;   // animate at 20% of reported speed — reduces overshoot and snap-back
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let map, markers = {}, selectedRoute = null, ws = null;
@@ -15,6 +16,9 @@ let routesData = [];         // full route objects from last /api/plan response
 let userLocation = null;     // saved GPS fix — restored after clearSearch()
 let userMarker   = null;     // blue "you are here" circle on the map
 let selectedRouteName = null; // short name of the active route, e.g. "S3"
+let vehicleData = {};        // vehicle_id → latest vehicle object from WebSocket
+let sidebarVehicleId = null; // id of the vehicle whose sidebar is open (null = closed)
+let sidebarStops = [];       // cached stop list for the open sidebar (avoids re-fetching)
 
 // ── Init map ──────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
@@ -177,7 +181,7 @@ async function search() {
 // ── Clear search ──────────────────────────────────────────────────────────────
 function clearSearch() {
   closeWebSocket();
-  clearMarkers();
+  clearMarkers();    // also calls closeSidebar()
   clearRouteLines();
   toLocation = selectedRoute = null;
   selectedRouteName = null;
@@ -249,7 +253,7 @@ function selectRoute(routeId, card) {
   card.classList.add("active");
 
   closeWebSocket();
-  clearMarkers();
+  clearMarkers();    // also calls closeSidebar()
   clearRouteLines();
   selectedRoute     = routeId;
   selectedRouteName = null;   // will be set below once we find the route object
@@ -452,6 +456,8 @@ async function updateMarkers(vehicles) {
 
   for (const v of vehicles) {
     seen.add(v.id);
+    vehicleData[v.id] = v;   // always store latest data so the click handler reads it fresh
+
     const popup = buildPopup(v);
 
     // ── create marker if new ──────────────────────────────────────────────
@@ -459,9 +465,18 @@ async function updateMarkers(vehicles) {
       const icon   = buildBusIcon(v.bearing, v.delay_seconds, v.is_delay_realtime, selectedRouteName);
       const marker = L.marker([v.lat, v.lon], { icon }).bindPopup(popup).addTo(map);
       marker.options._delayBucket = _delayBucket(v.delay_seconds, v.is_delay_realtime);
+      // Click opens the journey sidebar for this bus.
+      // Reads vehicleData[v.id] at click time — so it always has the latest vehicle state.
+      marker.on("click", () => openJourneySidebar(vehicleData[v.id]));
       markers[v.id] = marker;
     } else {
       markers[v.id].setPopupContent(popup);
+    }
+
+    // If the sidebar is open for this vehicle, refresh the current-stop highlight.
+    // next_stop_id can change every 30 s as the bus advances through stops.
+    if (v.id === sidebarVehicleId && sidebarStops.length > 0) {
+      renderStopList(sidebarStops, v.next_stop_id);
     }
 
     const marker = markers[v.id];
@@ -473,8 +488,8 @@ async function updateMarkers(vehicles) {
       _stopAnim(v.id);
 
       const startIdx     = _closestIdx(shape, v.lat, v.lon);
-      const speedMps     = (v.speed_kmh || 30) / 3.6;   // default 30 km/h when unknown
-      const targetMeters = speedMps * 30;                // distance in one 30s cycle
+      const speedMps     = (v.speed_kmh || 30) / 3.6 * ANIM_SPEED_SCALE;  // scaled down to reduce overshoot
+      const targetMeters = speedMps * 30;                // distance in one 30s cycle at scaled speed
       const path         = _pathAhead(shape, startIdx, targetMeters);
 
       if (path.length >= 2) {
@@ -512,8 +527,11 @@ async function updateMarkers(vehicles) {
     if (!seen.has(id)) {
       _stopAnim(id);
       delete animState[id];
+      delete vehicleData[id];
       map.removeLayer(markers[id]);
       delete markers[id];
+      // Close sidebar if this was the selected bus
+      if (id === sidebarVehicleId) closeSidebar();
     }
   });
 }
@@ -553,17 +571,36 @@ function buildBusIcon(bearing, delaySeconds, isDelayRealtime, routeName) {
 }
 
 function buildPopup(v) {
-  const stops = (v.current_stop || v.next_stop)
-    ? `<div style="color:#666;margin-bottom:4px">${v.current_stop || "—"} → ${v.next_stop || "—"}</div>`
+  // "Next stop in X min" — computed live from predicted Unix timestamp
+  let nextStopRow = "";
+  if (v.next_stop_arrival) {
+    const minsAway = Math.round((v.next_stop_arrival - Date.now() / 1000) / 60);
+    const label    = minsAway > 0 ? `${minsAway} min` : "Arriving now";
+    nextStopRow    = `<tr><td style="color:#888">Next stop</td><td>${label}</td></tr>`;
+  }
+
+  // "Y stops remaining"
+  const stopsRow = v.stops_remaining != null
+    ? `<tr><td style="color:#888">Stops left</td><td>${v.stops_remaining}</td></tr>`
     : "";
+
+  // "Trip ends at HH:MM"
+  let endsRow = "";
+  if (v.terminus_arrival) {
+    const endsAt = new Date(v.terminus_arrival * 1000)
+      .toLocaleTimeString("fi-FI", { hour: "2-digit", minute: "2-digit" });
+    endsRow = `<tr><td style="color:#888">Trip ends</td><td>${endsAt}</td></tr>`;
+  }
 
   return `
     <div style="min-width:180px;font-size:12px;">
       <strong>Route ${v.route_id} — Bus ${v.label || v.id}</strong>
-      ${stops}
       <hr style="margin:6px 0;border:none;border-top:1px solid #eee;">
       <table style="width:100%">
         <tr><td style="color:#888">Delay</td><td><strong>${v.delay_label || "Unknown"}</strong></td></tr>
+        ${nextStopRow}
+        ${stopsRow}
+        ${endsRow}
         <tr><td style="color:#888">Speed</td><td>${v.speed_kmh != null ? v.speed_kmh + " km/h" : "—"}</td></tr>
       </table>
     </div>`;
@@ -576,6 +613,8 @@ function clearMarkers() {
     map.removeLayer(markers[id]);
   });
   markers = {};
+  vehicleData = {};
+  closeSidebar();
 }
 
 // ── Route polylines ───────────────────────────────────────────────────────────
@@ -656,4 +695,92 @@ function showError(msg) {
 
 function hideError() {
   document.getElementById("error-box").classList.add("hidden");
+}
+
+// ── Bus journey sidebar ───────────────────────────────────────────────────────
+
+async function openJourneySidebar(v) {
+  if (!v || !v.trip_id) return;
+
+  // Update header labels
+  document.getElementById("journey-route").textContent = `Route ${v.route_id}`;
+  document.getElementById("journey-bus").textContent   = `Bus ${v.label || v.id}`;
+
+  // Show sidebar with loading state immediately so the user gets instant feedback
+  document.getElementById("journey-stops").innerHTML =
+    '<div class="journey-loading">Loading stops…</div>';
+  document.getElementById("journey-sidebar").classList.remove("hidden");
+
+  sidebarVehicleId = v.id;
+
+  // If the same trip is already cached, just re-render without fetching
+  if (sidebarStops.length > 0 && sidebarStops[0]._trip_id === v.trip_id) {
+    renderStopList(sidebarStops, v.next_stop_id);
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/trip/${encodeURIComponent(v.trip_id)}/stops`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const stops = await res.json();
+
+    if (!Array.isArray(stops) || stops.length === 0) {
+      document.getElementById("journey-stops").innerHTML =
+        '<div class="journey-error">No stop data available for this trip.</div>';
+      return;
+    }
+
+    // Tag each stop with the trip_id so we can detect cache hits above
+    stops.forEach(s => { s._trip_id = v.trip_id; });
+    sidebarStops = stops;
+
+    renderStopList(stops, v.next_stop_id);
+  } catch (e) {
+    console.error("Journey sidebar fetch error:", e);
+    document.getElementById("journey-stops").innerHTML =
+      '<div class="journey-error">Could not load stop list.</div>';
+  }
+}
+
+function renderStopList(stops, nextStopId) {
+  // Find the sequence number of the next stop so we can classify all other stops
+  const nextStop = stops.find(s => s.stop_id === nextStopId);
+  const nextSeq  = nextStop ? nextStop.sequence : -1;
+
+  const html = stops.map(stop => {
+    const isPassed  = nextSeq > 0 && stop.sequence < nextSeq;
+    const isCurrent = stop.stop_id === nextStopId;
+
+    let rowClass  = "journey-stop";
+    let indicator = "";
+
+    if (isCurrent) {
+      rowClass  += " journey-stop-current";
+      indicator  = "▶";
+    } else if (isPassed) {
+      rowClass  += " journey-stop-passed";
+      indicator  = "✓";
+    }
+
+    return `<div class="${rowClass}">
+      <span class="journey-stop-indicator">${indicator}</span>
+      <div class="journey-stop-info">
+        <span class="journey-stop-name">${stop.name}</span>
+        <span class="journey-stop-time">${stop.scheduled_time}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  document.getElementById("journey-stops").innerHTML = html;
+
+  // Scroll so the current stop is visible in the middle of the list
+  const currentEl = document.querySelector(".journey-stop-current");
+  if (currentEl) currentEl.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function closeSidebar() {
+  const el = document.getElementById("journey-sidebar");
+  if (el) el.classList.add("hidden");
+  sidebarVehicleId = null;
+  sidebarStops     = [];
 }

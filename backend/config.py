@@ -11,8 +11,12 @@ WALTTI_ID      = os.getenv("WALTTI_ID", "")
 WALTTI_SECRET  = os.getenv("WALTTI_SECRET", "")
 WALTTI_BASE_URL = os.getenv("WALTTI_BASE_URL", "https://data.waltti.fi/jyvaskyla/api/gtfsrealtime/v1.0/feed")
 
+# ── Static GTFS (Jyväskylä = authority 209) ──────────────────────────────────
+# Public download — no auth required. Refreshed nightly at 01:00 EET by Waltti.
+GTFS_STATIC_URL   = os.getenv("GTFS_STATIC_URL",  "https://tvv.fra1.digitaloceanspaces.com/209.zip")
+GTFS_SCHEDULE_TTL = int(os.getenv("GTFS_SCHEDULE_TTL", "90000"))  # 25 h — outlasts one nightly cycle
+
 # ── Digitransit ───────────────────────────────────────────────────────────────
-# TODO: confirm key and header name with team
 DIGITRANSIT_API_KEY  = os.getenv("DIGITRANSIT_API_KEY", "")
 DIGITRANSIT_BASE_URL = os.getenv("DIGITRANSIT_BASE_URL", "https://api.digitransit.fi")
 

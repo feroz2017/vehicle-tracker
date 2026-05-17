@@ -7,9 +7,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import REDIS_URL, FRONTEND_DIR
+from app.logging_config import setup_logging
 from app.routes import router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+setup_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

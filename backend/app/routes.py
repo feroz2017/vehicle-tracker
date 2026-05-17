@@ -207,6 +207,109 @@ async def get_shape(trip_id: str, redis = Depends(get_redis)):
         return {"points": []}
 
 
+@router.get("/api/trip/{trip_id}/stops")
+async def get_trip_stops(trip_id: str, redis = Depends(get_redis)):
+    """
+    Return the ordered stop list for a trip, used by the bus journey sidebar.
+
+    Flow:
+      1. Check cache trip_stops:{trip_id} (24 h TTL — static data, never changes intraday)
+      2. HGETALL schedule:{trip_id} → all stop_ids, scheduled seconds, sequences
+         (schedule hash stores "{stop_id}" → seconds AND "{stop_id}:seq" → sequence_number)
+      3. Pipeline HGETALL stop:{stop_id} for every stop → name + lat/lon
+      4. Sort by sequence, format scheduled_time as "HH:MM", cache + return
+
+    Returns [] if trip has no schedule data (GTFS not loaded yet).
+    Returns 404 if trip_id is not found at all.
+    """
+    if not redis:
+        return []
+
+    cache_key = f"trip_stops:{trip_id}"
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    try:
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception as exc:
+        logger.warning("Redis read failed for trip_stops: %s", exc)
+
+    # ── Read schedule hash ────────────────────────────────────────────────────
+    try:
+        schedule = await redis.hgetall(f"schedule:{trip_id}")
+    except Exception as exc:
+        logger.error("Failed to read schedule for trip %s: %s", trip_id, exc)
+        return []
+
+    if not schedule:
+        return JSONResponse(
+            {"error": "Trip not found in GTFS schedule"},
+            status_code=404,
+        )
+
+    # The schedule hash contains two kinds of fields:
+    #   "207579"      → "48780"   (seconds since midnight — scheduled arrival)
+    #   "207579:seq"  → "12"      (stop_sequence — position in trip)
+    # Split them into two dicts.
+    stop_times: dict[str, int] = {}
+    stop_seqs:  dict[str, int] = {}
+
+    for field, value in schedule.items():
+        if field.endswith(":seq"):
+            stop_seqs[field[:-4]] = int(value)   # strip the ":seq" suffix
+        else:
+            try:
+                stop_times[field] = int(value)
+            except ValueError:
+                continue
+
+    stop_ids = list(stop_times.keys())
+    if not stop_ids:
+        return []
+
+    # ── Fetch stop metadata via pipeline (one round trip) ────────────────────
+    try:
+        pipe = redis.pipeline()
+        for stop_id in stop_ids:
+            pipe.hgetall(f"stop:{stop_id}")
+        stop_data_list = await pipe.execute()
+    except Exception as exc:
+        logger.error("Failed to fetch stop metadata for trip %s: %s", trip_id, exc)
+        return []
+
+    # ── Assemble + sort result ────────────────────────────────────────────────
+    stops = []
+    for stop_id, stop_data in zip(stop_ids, stop_data_list):
+        if not stop_data:
+            continue  # stop_id in schedule but missing from stops.txt — skip
+
+        secs    = stop_times[stop_id]
+        # Use mod 86400 so GTFS times > 24:00 (night buses) display as a
+        # sensible clock time rather than "25:30"
+        hours   = (secs % 86400) // 3600
+        minutes = (secs % 3600)  // 60
+
+        stops.append({
+            "stop_id":        stop_id,
+            "name":           stop_data.get("name", ""),
+            "lat":            float(stop_data.get("lat", 0)),
+            "lon":            float(stop_data.get("lon", 0)),
+            "scheduled_time": f"{hours:02d}:{minutes:02d}",
+            "sequence":       stop_seqs.get(stop_id, 0),
+        })
+
+    stops.sort(key=lambda s: s["sequence"])
+
+    # ── Cache result (static data — safe to cache 24 h) ──────────────────────
+    try:
+        await redis.set(cache_key, json.dumps(stops), ex=GEO_CACHE_TTL)
+    except Exception as exc:
+        logger.warning("Failed to cache trip_stops %s: %s", trip_id, exc)
+
+    return stops
+
+
 @router.get("/api/routes")
 async def get_routes(redis = Depends(get_redis)):
     """Return list of route IDs that currently have active vehicles."""
@@ -251,17 +354,46 @@ async def vehicle_stream(
 async def _real_stream(websocket: WebSocket, route_id: str, redis) -> None:
     """Stream real vehicle data from Redis via Pub/Sub."""
 
-    async def _build_payload() -> str | None:
+    def _log_send(trigger: str, vehicle_count: int, freshness_level: str, age_seconds: int) -> None:
+        """
+        Emit a structured log line for every message sent to the frontend.
+
+        trigger:
+          "connect"   – first send on WebSocket open (client just connected)
+          "pubsub"    – worker published new data; frontend gets a live push
+          "heartbeat" – 10s keepalive; data may be unchanged
+          "empty"     – no vehicles in Redis yet (worker hasn't run)
+
+        Having this log means: if the frontend shows something wrong you can open
+        the terminal and see exactly what was sent, when, and why.
+        """
+        logger.info(
+            "ws_send",
+            extra={
+                "route_id":       route_id,
+                "trigger":        trigger,
+                "vehicle_count":  vehicle_count,
+                "freshness":      freshness_level,
+                "age_seconds":    age_seconds,
+            },
+        )
+
+    async def _build_payload() -> tuple[str, int, str, int] | tuple[None, int, str, int]:
+        """
+        Build the WebSocket payload from Redis.
+        Returns (json_str, vehicle_count, freshness_level, age_seconds).
+        Returns (None, ...) if no vehicle data exists yet.
+        """
         raw = await redis.get(f"vehicles:{route_id}")
         if not raw:
-            return None
+            return None, 0, "STALE", 0
         vehicles = json.loads(raw)
 
         fetched_at_raw = await redis.get("vehicles:fetched_at")
         fetched_at     = float(fetched_at_raw) if fetched_at_raw else 0.0
         freshness      = vehicle_service.compute_freshness(fetched_at)
 
-        return json.dumps({
+        payload = json.dumps({
             "route_id":      route_id,
             "vehicle_count": len(vehicles),
             "vehicles":      vehicles,
@@ -272,19 +404,23 @@ async def _real_stream(websocket: WebSocket, route_id: str, redis) -> None:
                 "age_seconds": freshness.age_seconds,
             },
         })
+        return payload, len(vehicles), freshness.level.value, freshness.age_seconds
 
-    # Send current state immediately on connect
-    payload = await _build_payload()
+    # ── Initial send on connect ───────────────────────────────────────────────
+    payload, v_count, f_level, f_age = await _build_payload()
     if payload:
         await websocket.send_text(payload)
+        _log_send("connect", v_count, f_level, f_age)
     else:
         # Worker hasn't written anything yet — send empty state
-        await websocket.send_text(json.dumps({
+        empty = json.dumps({
             "route_id": route_id, "vehicle_count": 0, "vehicles": [], "alerts": [],
             "freshness": {"level": "STALE", "label": "Waiting for data…", "age_seconds": 0},
-        }))
+        })
+        await websocket.send_text(empty)
+        _log_send("empty", 0, "STALE", 0)
 
-    # Subscribe and stream updates
+    # ── Subscribe and stream updates ─────────────────────────────────────────
     pubsub = redis.pubsub()
     await pubsub.subscribe("vehicles:updated")
 
@@ -292,19 +428,114 @@ async def _real_stream(websocket: WebSocket, route_id: str, redis) -> None:
         last_send = time.time()
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            now = time.time()
+            now     = time.time()
+
+            is_pubsub    = message and message["type"] == "message"
+            is_heartbeat = (now - last_send) >= 10
+
             # Send on Pub/Sub event OR every 10s as a heartbeat.
             # The heartbeat serves two purposes:
             #   1. Keeps the connection alive between 30s worker cycles
             #   2. Detects silently disconnected clients (send_text raises on dead socket)
-            if message and message["type"] == "message" or (now - last_send) >= 10:
-                payload = await _build_payload()
+            if is_pubsub or is_heartbeat:
+                payload, v_count, f_level, f_age = await _build_payload()
                 if payload:
                     await websocket.send_text(payload)
+                    _log_send("pubsub" if is_pubsub else "heartbeat", v_count, f_level, f_age)
                     last_send = now
+
             await asyncio.sleep(0.05)
     finally:
         await pubsub.unsubscribe("vehicles:updated")
         await pubsub.aclose()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# OBSERVABILITY ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/health")
+async def health(redis=Depends(get_redis)):
+    """
+    System health check.
+
+    Returns a snapshot of key operational signals:
+      redis            – can we reach the data store?
+      gtfs_loaded      – is the static schedule available? (needed for delay colours)
+      data_age_seconds – how stale are vehicle positions? (> 120 s → STALE badge)
+      active_routes    – how many routes currently have live buses?
+      total_vehicles   – total active vehicles across all routes
+
+    HTTP 200 → healthy.  HTTP 503 → degraded (Redis down or exception).
+    """
+    result: dict = {
+        "status":           "degraded",
+        "redis":            "unavailable",
+        "gtfs_loaded":      False,
+        "data_age_seconds": None,
+        "active_routes":    0,
+        "total_vehicles":   0,
+    }
+
+    if not redis:
+        return JSONResponse(result, status_code=503)
+
+    try:
+        await redis.ping()
+        result["redis"] = "ok"
+
+        # Is the static GTFS schedule loaded? Required for delay computation.
+        gtfs_date = await redis.get("gtfs:loaded_date")
+        result["gtfs_loaded"] = bool(gtfs_date)
+        if gtfs_date:
+            result["gtfs_loaded_date"] = gtfs_date
+
+        # How old is the most recent vehicle snapshot?
+        fetched_at_raw = await redis.get("vehicles:fetched_at")
+        if fetched_at_raw:
+            result["data_age_seconds"] = round(time.time() - float(fetched_at_raw))
+
+        # How many routes/vehicles are active right now?
+        route_ids_raw = await redis.get("vehicles:route_ids")
+        result["active_routes"] = len(json.loads(route_ids_raw)) if route_ids_raw else 0
+
+        total_vehicles_raw = await redis.get("stats:total_vehicles")
+        result["total_vehicles"] = int(total_vehicles_raw) if total_vehicles_raw else 0
+
+        result["status"] = "healthy"
+        return result
+
+    except Exception as exc:
+        logger.error("Health check failed: %s", exc)
+        result["error"] = str(exc)
+        return JSONResponse(result, status_code=503)
+
+
+@router.get("/api/stats")
+async def stats(redis=Depends(get_redis)):
+    """
+    Operational telemetry counters.
+
+    All values are best-effort — keys may not exist on first boot.
+      fetch_cycles           – total worker cycles completed since startup
+      last_cycle_ms          – duration of the most recent fetch cycle
+      total_vehicles_tracked – vehicle count from the most recent cycle
+    """
+    if not redis:
+        return {"error": "Redis unavailable"}
+
+    try:
+        fetch_count_raw, last_ms_raw, total_v_raw = await asyncio.gather(
+            redis.get("stats:fetch_count"),
+            redis.get("stats:last_cycle_ms"),
+            redis.get("stats:total_vehicles"),
+        )
+        return {
+            "fetch_cycles":           int(fetch_count_raw) if fetch_count_raw else 0,
+            "last_cycle_ms":          int(last_ms_raw)     if last_ms_raw     else None,
+            "total_vehicles_tracked": int(total_v_raw)     if total_v_raw     else 0,
+        }
+
+    except Exception as exc:
+        logger.error("Stats endpoint error: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=503)

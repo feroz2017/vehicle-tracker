@@ -84,6 +84,71 @@ def test_enrich_vehicle_without_trip_id():
     assert result[0].next_stop_id is None
 
 
+# ── enrich_with_updates — delay computation ───────────────────────────────────
+#
+# next_stop_arrival = 1779014074 → 13:34:34 local time
+# scheduled_seconds = 13*3600 + 33*60 + 0 = 48780  (13:33:00)
+# delay = (13*3600+34*60+34) − 48780 = 48874 − 48780 = 94 seconds late
+
+def _next_stop_arrival_ts() -> int:
+    """Unix timestamp for 13:34:34 on 2026-05-17 in local time."""
+    return 1779014074   # known value from live feed sample
+
+
+def _scheduled_secs() -> int:
+    """13:33:00 expressed as seconds since midnight."""
+    return 13 * 3600 + 33 * 60 + 0   # 48780
+
+
+def test_enrich_computes_delay_when_schedule_available():
+    """Delay = predicted arrival − scheduled arrival at next stop."""
+    from datetime import datetime
+    vehicle = make_vehicle(trip_id="trip-1")
+    update  = TripUpdate(
+        trip_id="trip-1",
+        next_stop_id="207579",
+        next_stop_arrival=_next_stop_arrival_ts(),
+        terminus_arrival=1779015364,
+        stops_remaining=16,
+    )
+    scheduled = {"trip-1": _scheduled_secs()}
+    result    = vehicle_service.enrich_with_updates([vehicle], [update], scheduled)
+
+    pred_dt   = datetime.fromtimestamp(_next_stop_arrival_ts())
+    pred_secs = pred_dt.hour * 3600 + pred_dt.minute * 60 + pred_dt.second
+    expected_delay = pred_secs - _scheduled_secs()
+
+    assert result[0].is_delay_realtime is True
+    assert result[0].delay_seconds     == expected_delay
+
+
+def test_enrich_no_schedule_leaves_delay_defaults():
+    """Without schedule data, delay fields stay at their defaults."""
+    vehicle = make_vehicle(trip_id="trip-1")
+    result  = vehicle_service.enrich_with_updates([vehicle], [make_trip_update()])
+    assert result[0].is_delay_realtime is False
+    assert result[0].delay_seconds     == 0
+
+
+def test_enrich_early_bus_has_negative_delay():
+    """A bus arriving before schedule has negative delay_seconds."""
+    from datetime import datetime
+    vehicle = make_vehicle(trip_id="trip-1")
+    update  = TripUpdate(
+        trip_id="trip-1",
+        next_stop_id="207579",
+        next_stop_arrival=_next_stop_arrival_ts(),
+        terminus_arrival=1779015364,
+        stops_remaining=16,
+    )
+    # Schedule says 13:40:00 — bus is actually early
+    early_scheduled = 13 * 3600 + 40 * 60 + 0   # 49200
+    result = vehicle_service.enrich_with_updates([vehicle], [update], {"trip-1": early_scheduled})
+
+    assert result[0].is_delay_realtime is True
+    assert result[0].delay_seconds     < 0   # early → negative
+
+
 # ── compute_freshness ─────────────────────────────────────────────────────────
 
 def test_freshness_live():

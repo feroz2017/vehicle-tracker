@@ -51,11 +51,27 @@
 <!-- ── LOADING ── -->
 <div id="loading" class="loading hidden">Searching routes…</div>
 
-<!-- ── MAP ── -->
-<div id="map"></div>
+<!-- ── MAP + SIDEBAR (flex row — sidebar pushes map smaller when open) ── -->
+<div id="map-container">
 
-<!-- ── EMPTY STATE ── -->
-<div id="empty-state" class="empty-state hidden">No active buses on this route right now.</div>
+  <div id="map"></div>
+
+  <!-- ── BUS JOURNEY SIDEBAR ── -->
+  <div id="journey-sidebar" class="journey-sidebar hidden">
+    <div class="journey-sidebar-header">
+      <div>
+        <div id="journey-route" class="journey-route-label"></div>
+        <div id="journey-bus"   class="journey-bus-label"></div>
+      </div>
+      <button class="journey-close-btn" onclick="closeSidebar()">✕</button>
+    </div>
+    <div id="journey-stops" class="journey-stop-list"></div>
+  </div>
+
+  <!-- ── EMPTY STATE (inside container so it positions over the map only) ── -->
+  <div id="empty-state" class="empty-state hidden">No active buses on this route right now.</div>
+
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/app.js"></script>

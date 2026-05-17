@@ -15,10 +15,12 @@ from config import REDIS_URL, WORKER_INTERVAL
 from ingestion.waltti_client import fetch_vehicle_positions, fetch_trip_updates, fetch_alerts
 from ingestion.gtfs_parser   import parse_vehicle_positions, parse_trip_updates, parse_alerts
 from ingestion.cache_writer  import write_vehicles, write_alerts
+from ingestion               import gtfs_loader
 from processing.models       import Vehicle, TripUpdate
 from processing              import vehicle_service
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [worker] %(message)s")
+from app.logging_config import setup_logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -60,6 +62,39 @@ def _raw_to_updates(raw: list[dict]) -> list[TripUpdate]:
     return updates
 
 
+async def _load_scheduled_arrivals(redis, updates: list[TripUpdate]) -> dict[str, int]:
+    """
+    For each TripUpdate that has a next_stop_id, fetch the scheduled arrival
+    time (seconds since midnight) from the static GTFS Redis hash.
+
+    All lookups are pipelined — one Redis round trip regardless of how many
+    vehicles are active.
+
+    Returns {trip_id: scheduled_seconds_since_midnight}.
+    Empty dict if no schedule data is loaded yet (first boot or Redis flushed).
+    """
+    # Only look up trips that have a next stop to compare against
+    lookups = [(u.trip_id, u.next_stop_id) for u in updates if u.trip_id and u.next_stop_id]
+    if not lookups:
+        return {}
+
+    try:
+        pipe = redis.pipeline()
+        for trip_id, stop_id in lookups:
+            pipe.hget(f"schedule:{trip_id}", stop_id)
+        results = await pipe.execute()
+    except Exception as exc:
+        logger.warning("Failed to load scheduled arrivals: %s", exc)
+        return {}
+
+    scheduled: dict[str, int] = {}
+    for (trip_id, _), val in zip(lookups, results):
+        if val is not None:
+            scheduled[trip_id] = int(val)
+
+    return scheduled
+
+
 async def run_cycle(redis) -> None:
     """
     One full fetch cycle:
@@ -67,11 +102,13 @@ async def run_cycle(redis) -> None:
       2. Parse each feed
       3. Convert raw dicts → domain objects, enrich vehicles with delays
       4. Write enriched data to Redis and publish Pub/Sub event
+      5. Write telemetry counters (for /api/stats)
 
     Each step is wrapped in try/except — a failure in one feed
     does not stop the others.
     """
-    fetched_at = time.time()
+    cycle_start = time.monotonic()   # wall-clock start for duration tracking
+    fetched_at  = time.time()
     logger.info("Fetching all Waltti feeds...")
 
     # ── 1. Fetch concurrently ─────────────────────────────────────────────────
@@ -115,8 +152,17 @@ async def run_cycle(redis) -> None:
     # ── 3. Convert + enrich ───────────────────────────────────────────────────
     vehicles = _raw_to_vehicles(raw_vehicles)
     updates  = _raw_to_updates(raw_trip_updates)
-    enriched = vehicle_service.enrich_with_updates(vehicles, updates)
-    logger.info("Enriched %d vehicles with trip update data", len(enriched))
+
+    # Load scheduled arrival times for each vehicle's next stop from Redis.
+    # One HGET per vehicle — pipelined into a single round trip.
+    scheduled = await _load_scheduled_arrivals(redis, updates)
+
+    enriched = vehicle_service.enrich_with_updates(vehicles, updates, scheduled)
+    logger.info(
+        "Enriched %d vehicles — %d with real delay data",
+        len(enriched),
+        sum(1 for v in enriched if v.is_delay_realtime),
+    )
 
     # ── 4. Write to Redis ─────────────────────────────────────────────────────
     try:
@@ -125,12 +171,38 @@ async def run_cycle(redis) -> None:
     except Exception as exc:
         logger.error("Failed to write to Redis: %s", exc)
 
+    # ── 5. Telemetry counters (best-effort — never blocks the cycle) ──────────
+    # These feed /api/stats so the system can answer "what has it been doing?"
+    cycle_ms = round((time.monotonic() - cycle_start) * 1000)
+    try:
+        pipe = redis.pipeline()
+        pipe.incr("stats:fetch_count")                      # total cycles ever
+        pipe.set("stats:last_cycle_ms",    cycle_ms)        # last cycle wall-time
+        pipe.set("stats:total_vehicles",   len(enriched))   # snapshot vehicle count
+        await pipe.execute()
+    except Exception:
+        pass  # stats are observability data — a Redis blip must not crash the cycle
+
+    logger.info(
+        "cycle_complete",
+        extra={
+            "vehicle_count":    len(enriched),
+            "realtime_delay":   sum(1 for v in enriched if v.is_delay_realtime),
+            "duration_ms":      cycle_ms,
+        },
+    )
+
 
 async def main() -> None:
     """Main worker loop — runs forever until interrupted."""
     logger.info("Worker starting. Interval: %ds", WORKER_INTERVAL)
 
     redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
+
+    # Load static GTFS schedule before first cycle so delay data is available
+    # immediately. Skipped if already loaded today (gtfs-loader service ran first).
+    logger.info("Checking static GTFS schedule...")
+    await gtfs_loader.load_if_needed(redis)
 
     backoff = WORKER_INTERVAL
 
