@@ -19,6 +19,7 @@ docs/
   system-design.html           ← course-appropriate design diagram
   system-design-reference.html ← production-grade reference design
   flow-diagram.html            ← request flow walkthrough
+  adr/                         ← Architecture Decision Records folder
 docker-compose.yml
 .env.example
 ```
@@ -180,5 +181,4 @@ backend/
 ├── requirements.txt
 └── Dockerfile
 ```
-# -vehicle-tracker-
-# vehicle-tracker
+

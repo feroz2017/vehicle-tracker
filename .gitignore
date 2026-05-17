@@ -38,7 +38,4 @@ htmlcov/
 gtfs_dump*.json
 gtfs_dump-*.json
 
-
-docs
-
 TODO.md
